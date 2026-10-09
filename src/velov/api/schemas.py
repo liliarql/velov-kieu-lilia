@@ -25,7 +25,7 @@ class PredictionRequest(BaseModel):
     # TODO 3 : refuse tout champ non déclaré
     model_config = ConfigDict(extra="forbid")
     # TODO 1 + TODO 2 : les 6 champs typés, avec leurs bornes
-    station_id: int = Field(..., description="Identifiant de la station")
+    station_id: int = Field(...,ge =1, description="Identifiant de la station")
     timestamp: AwareDatetime = Field(..., description="Instant de l'observation (avec fuseau)")
     capacity: int = Field(..., gt=0, le=100, description="Nombre total de bornes")
     bikes_available: int = Field(..., ge=0, description="Vélos disponibles")
