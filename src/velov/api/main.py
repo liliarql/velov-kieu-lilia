@@ -24,6 +24,7 @@ from pathlib import Path
 import joblib
 import pandas as pd
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
 
 from velov.api.schemas import PredictionRequest, PredictionResponse
 from velov.features import FEATURES, add_features
@@ -61,6 +62,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Vélo'v availability API", version="1.0.0", lifespan=lifespan)
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    """Redirige la racine vers la documentation interactive (/docs)."""
+    return RedirectResponse(url="/docs")
 
 
 @app.get("/health")
