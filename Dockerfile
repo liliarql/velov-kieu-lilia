@@ -1,0 +1,55 @@
+# ===== STAGE 1: BUILD =====
+ 
+ARG PYTHON_IMAGE=python:3.12-slim
+ 
+FROM ${PYTHON_IMAGE} AS builder
+ 
+ENV PIP_NO_CACHE_DIR=1
+ENV PATH="/opt/venv/bin:$PATH"
+ 
+WORKDIR /build
+ 
+# Python virtual environment
+RUN python -m venv /opt/venv
+ 
+#  dependencies use Docker cache
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+ 
+# package of project Vélo'v
+COPY pyproject.toml .
+COPY src/ src/
+RUN pip install --no-deps .
+ 
+ 
+# ===== STAGE 2: RUNTIME =====
+ 
+FROM ${PYTHON_IMAGE} AS runtime
+ 
+ENV PATH="/opt/venv/bin:$PATH" \
+    MODEL_DIR="/app/models" \
+    PYTHONUNBUFFERED=1
+ 
+# User (not use Root)
+RUN useradd --create-home --uid 10001 appuser
+ 
+WORKDIR /app
+ 
+# Copy env Python from stage builder
+COPY --from=builder /opt/venv /opt/venv
+ 
+# Copy model train and metadata
+COPY models/ models/
+ 
+# RUn API with user
+USER appuser
+ 
+# Port  FastAPI
+EXPOSE 8000
+ 
+# Are API ready
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"]
+ 
+# Start FastAPI
+CMD ["uvicorn", "velov.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

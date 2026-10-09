@@ -1,0 +1,20 @@
+# Contexte de build minimal : seul ce qui sert à l'image de serving.
+
+.git
+.venv
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+.pytest_cache
+.ruff_cache
+
+# Secrets (EX-06)
+.env
+.env.*
+# Données, expériences et artefacts hors serving
+data/
+tests/
+docs/
+exercices
+mlflow.db
+mlruns/
