@@ -1,0 +1,5 @@
+# Dépendances du PIPELINE de données (image velov-pipeline : collecte bronze + dbt).
+# Séparées du serving : l'API n'embarque ni dbt ni ses dépendances.
+dbt-core==1.11.16
+dbt-postgres==1.11.0
+psycopg[binary]==3.2.10

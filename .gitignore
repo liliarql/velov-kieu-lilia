@@ -17,3 +17,8 @@ mlruns/
 *.egg-info/
 # Clés SSH de la VM : jamais dans git
 ssh/
+
+# dbt : artefacts générés
+pipeline/target/
+pipeline/logs/
+pipeline/.user.yml

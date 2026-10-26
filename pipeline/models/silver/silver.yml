@@ -1,0 +1,24 @@
+version: 2
+
+models:
+  - name: silver_station_status
+    columns:
+      - name: station_id
+        data_tests: [not_null]
+      - name: observed_at
+        data_tests: [not_null]
+      - name: bikes_available
+        data_tests: [not_null]
+
+  - name: silver_stations
+    description: Référentiel des stations (dernière version connue de chaque fiche).
+    columns:
+      - name: station_id
+        data_tests: [not_null, unique]
+      - name: capacity
+        data_tests: [not_null]
+
+  - name: silver_weather_hourly
+    columns:
+      - name: hour_utc
+        data_tests: [not_null, unique]

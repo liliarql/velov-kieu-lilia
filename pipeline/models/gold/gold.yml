@@ -1,0 +1,55 @@
+version: 2
+
+models:
+  - name: gold_station_hourly
+    description: >
+      Table d'entraînement : une ligne par station et par heure UTC, au schéma du contrat d'entrée du modèle
+      (velov.features.RAW_COLUMNS). Contrat imposé : une table qui ne le respecte pas n'est pas publiée (EX-12).
+    config:
+      contract:
+        enforced: true
+    constraints:
+      - type: primary_key
+        columns: [station_id, timestamp]
+    data_tests:
+      # Seuil : quelques relevés incohérents du flux GBFS sont tolérés (avertissement), pas une dérive massive.
+      - bikes_within_capacity:
+          arguments:
+            max_ratio: 0.01
+    columns:
+      - name: station_id
+        data_type: integer
+        constraints: [{type: not_null}]
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('silver_stations')
+                field: station_id
+      - name: timestamp
+        data_type: timestamp with time zone
+        description: Instant UTC de l'état décrit (dernier relevé publié dans l'heure qui précède).
+        constraints: [{type: not_null}]
+        data_tests: [not_null]
+      - name: capacity
+        data_type: integer
+        constraints:
+          - type: not_null
+          - type: check
+            expression: "capacity > 0"
+        data_tests: [not_null]
+      - name: bikes_available
+        data_type: integer
+        constraints:
+          - type: not_null
+          - type: check
+            expression: "bikes_available >= 0"
+        data_tests: [not_null]
+      - name: temperature
+        data_type: double precision
+        constraints: [{type: not_null}]
+        data_tests: [not_null]
+      - name: is_raining
+        data_type: boolean
+        constraints: [{type: not_null}]
+        data_tests: [not_null]

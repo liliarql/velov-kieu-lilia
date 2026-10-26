@@ -1,0 +1,13 @@
+# Connexion lue dans l'environnement : aucun secret dans le dépôt (EX-06).
+velov:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DBT_HOST', 'localhost') }}"
+      port: "{{ env_var('DBT_PORT', '5432') | int }}"
+      user: "{{ env_var('DBT_USER', 'velov') }}"
+      password: "{{ env_var('DBT_PASSWORD') }}"
+      dbname: "{{ env_var('DBT_DBNAME', 'velov') }}"
+      schema: public
+      threads: 4

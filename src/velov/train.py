@@ -8,6 +8,7 @@ Ce qu'on distribue (S1) n'est pas "un modèle" mais un paquet :
 Usage :
     python -m velov.train --data data/velov_history.csv --out models/
     python -m velov.train --data data/velov_history.csv --out models/ --mlflow
+    python -m velov.train --source gold --out models/   # table gold du pipeline (S3), DATABASE_URL requis
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
+import os
 import platform
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,7 +41,10 @@ from velov.features import (
     make_training_frame,
 )
 
+logger = logging.getLogger("velov.train")
+
 MODEL_FILENAME = "model.joblib"
+GOLD_TABLE = "gold.gold_station_hourly"
 METADATA_FILENAME = "metadata.json"
 SKOPS_TRUSTED_TYPES = ["sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor"]
 
@@ -79,11 +85,44 @@ def train(
     test_days: int = 14,
     seed: int = 42,
 ) -> dict:
-    """Entraîne, évalue contre une baseline, écrit l'artefact. Retourne les métadonnées."""
+    """Entraîne depuis un CSV (simulateur), évalue contre une baseline, écrit l'artefact."""
     if not data_path.exists():
         raise FileNotFoundError(f"{data_path} introuvable : lancer d'abord `python -m velov.data`")
 
     raw = pd.read_csv(data_path, parse_dates=["timestamp"])
+    return train_frame(raw, out_dir, sha256_of(data_path), version=version, test_days=test_days, seed=seed)
+
+
+def load_gold(database_url: str) -> pd.DataFrame:
+    """Lit la table gold et vérifie le contrat Pandera AVANT tout entraînement.
+
+    Les relevés bikes_available > capacity (tolérés sous le seuil du contrat) sont écartés :
+    l'API les refuse en entrée, le modèle n'a pas à les apprendre.
+    """
+    import psycopg  # imports locaux : inutiles pour entraîner sur le simulateur (build de l'image)
+
+    from velov.contract import validate_gold
+
+    with psycopg.connect(database_url, connect_timeout=10) as conn:
+        cur = conn.execute(f"SELECT {', '.join(RAW_COLUMNS)} FROM {GOLD_TABLE}")  # noqa: S608 (constantes)
+        gold = pd.DataFrame(cur.fetchall(), columns=RAW_COLUMNS)
+
+    gold = validate_gold(gold)
+    over = gold["bikes_available"] > gold["capacity"]
+    if over.any():
+        logger.warning("%s relevés bikes_available > capacity écartés", int(over.sum()))
+    return gold[~over].reset_index(drop=True)
+
+
+def train_frame(
+    raw: pd.DataFrame,
+    out_dir: Path,
+    data_sha256: str,
+    version: str = "0.1.0",
+    test_days: int = 14,
+    seed: int = 42,
+) -> dict:
+    """Entraîne sur un DataFrame au schéma RAW_COLUMNS, évalue contre une baseline, écrit l'artefact."""
     frame = make_training_frame(raw)
     train_df, test_df = temporal_split(frame, test_days)
 
@@ -117,7 +156,7 @@ def train(
             "n_test": int(len(test_df)),
         },
         "artifact": {"file": MODEL_FILENAME, "sha256": sha256_of(model_path)},
-        "data_sha256": sha256_of(data_path),
+        "data_sha256": data_sha256,
         "runtime": {
             "python": platform.python_version(),
             "scikit-learn": sklearn.__version__,
@@ -167,13 +206,24 @@ def log_to_mlflow(metadata: dict, out_dir: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Entraîne le modèle Vélo'v v0.")
+    parser.add_argument("--source", choices=["csv", "gold"], default="csv", help="simulateur (csv) ou table gold")
     parser.add_argument("--data", type=Path, default=Path("data/velov_history.csv"))
     parser.add_argument("--out", type=Path, default=Path("models"))
     parser.add_argument("--version", default="0.1.0")
+    parser.add_argument("--test-days", type=int, default=14)
     parser.add_argument("--mlflow", action="store_true", help="journaliser aussi dans MLflow")
     args = parser.parse_args()
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
-    metadata = train(args.data, args.out, version=args.version)
+    if args.source == "gold":
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            raise SystemExit("DATABASE_URL non défini (requis avec --source gold)")
+        gold = load_gold(database_url)
+        data_sha256 = hashlib.sha256(gold.to_csv(index=False).encode()).hexdigest()
+        metadata = train_frame(gold, args.out, data_sha256, version=args.version, test_days=args.test_days)
+    else:
+        metadata = train(args.data, args.out, version=args.version, test_days=args.test_days)
     m = metadata["metrics"]
     print(f"MAE modèle   : {m['mae_model']:.3f} vélos")
     print(f"MAE baseline : {m['mae_baseline_persistence']:.3f} vélos (persistance)")

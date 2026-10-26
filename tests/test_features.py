@@ -46,3 +46,13 @@ def test_target_is_shifted_per_station_without_leakage():
     assert frame.groupby("station_id").size().tolist() == [47, 47]
     s1 = frame[frame["station_id"] == "1"].reset_index(drop=True)
     assert (s1[TARGET].iloc[:-1].to_numpy() == s1["bikes_available"].iloc[1:].to_numpy()).all()
+
+
+def test_target_skips_missing_hours():
+    # Données réelles : une heure manquante (collecte arrêtée) ne doit pas devenir la cible "H+1".
+    df = simulate(days=2, n_stations=1).drop(index=10).reset_index(drop=True)
+    frame = make_training_frame(df)
+    gap_start = df.loc[9, "timestamp"]  # l'heure suivante (index 10) a été supprimée
+    assert gap_start not in set(frame["timestamp"])
+    # 48 h - 1 supprimée - 1 avant le trou - la dernière : 45 lignes
+    assert len(frame) == 45

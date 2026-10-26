@@ -32,5 +32,37 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Collecte bronze toutes les 15 min (GBFS Vélo'v + Open-Meteo). Tourne en continu sur la VM.
+  collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.pipeline
+    image: "velov-pipeline:${VERSION:-1.0.0}-${GIT_COMMIT:-unknown}"
+    command: ["python", "-m", "velov.ingest", "--every", "900"]
+    environment:
+      DATABASE_URL: "postgresql://velov:${POSTGRES_PASSWORD:?}@db:5432/velov"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # dbt à la demande : docker compose run --rm dbt build
+  dbt:
+    build:
+      context: .
+      dockerfile: Dockerfile.pipeline
+    image: "velov-pipeline:${VERSION:-1.0.0}-${GIT_COMMIT:-unknown}"
+    profiles: ["tools"]
+    entrypoint: ["dbt"]
+    command: ["build"]
+    environment:
+      DBT_HOST: db
+      DBT_USER: velov
+      DBT_PASSWORD: "${POSTGRES_PASSWORD:?}"
+      DBT_DBNAME: velov
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   pgdata:

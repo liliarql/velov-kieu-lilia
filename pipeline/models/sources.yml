@@ -1,0 +1,18 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: Données brutes écrites par `python -m velov.ingest` (payload JSON tel que reçu).
+    schema: bronze
+    # Alerte de fraîcheur : `dbt source freshness` échoue si la collecte s'est arrêtée.
+    loaded_at_field: ingested_at
+    freshness:
+      warn_after: {count: 1, period: hour}
+      error_after: {count: 6, period: hour}
+    tables:
+      - name: station_status
+        description: Un relevé par station et par publication du flux GBFS station_status.
+      - name: station_information
+        description: Une ligne par version de la fiche station (nom, position, capacité).
+      - name: weather_hourly
+        description: Météo Open-Meteo, une ligne par heure UTC écoulée.

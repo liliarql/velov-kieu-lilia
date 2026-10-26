@@ -48,6 +48,40 @@ curl -X POST http://127.0.0.1:8000/v1/predict \
 Le `timestamp` doit porter un fuseau (`+02:00`, `Z`...) : sans fuseau, l'API répond 422.
 Les instants sont renvoyés et journalisés en UTC (`"target_timestamp": "2026-10-06T07:00:00Z"`).
 
+## Pipeline de données (S3)
+
+Les données réelles remplacent le simulateur : disponibilités Vélo'v (flux GBFS du Grand Lyon) et météo (Open-Meteo).
+
+```
+GBFS Vélo'v ─┐                         dbt (pipeline/)
+             ├─ velov.ingest ─► bronze ───► silver ───► gold.gold_station_hourly ─► velov.train --source gold
+Open-Meteo ──┘  (collector, 15 min)   JSON brut   typé       contrat enforced           contrat Pandera
+```
+
+| Couche | Contenu | Garantie |
+|---|---|---|
+| bronze | Payload JSON tel que reçu (`bronze.station_status`, `station_information`, `weather_hourly`) | Idempotent : clé naturelle + `ON CONFLICT DO NOTHING` (EX-10) |
+| silver | Vues typées : relevés, versions des fiches stations, référentiel, météo horaire | Tests `not_null`, `unique` |
+| gold | Une ligne par station et par heure, au schéma `RAW_COLUMNS` de l'API | Contrat dbt `enforced` + contraintes (EX-12), point-in-time (EX-11), tests `not_null`, `relationships`, capacité avec seuil de 1 % |
+
+Depuis un clone propre (`.env` créé à partir de `.env.example`) :
+
+```bash
+docker compose up -d db collector                       # collecte toutes les 15 min
+docker compose run --rm collector python -m velov.ingest # un passage immédiat (sinon, attendre le premier)
+docker compose run --rm dbt build                       # silver + gold + tests
+docker compose run --rm dbt source freshness            # alerte si la collecte s'est arrêtée
+```
+
+Gold reste vide tant qu'aucune heure complète n'a été collectée (la ligne datée H attend la fin de l'heure H-1).
+Entraîner sur gold (environnement de développement, `pip install -r requirements-dev.txt`, base joignable) :
+
+```bash
+DATABASE_URL=postgresql://velov:<mot de passe>@<hôte>:5432/velov python -m velov.train --source gold
+```
+
+Choix d'architecture : [ADR-0002](docs/adr/0002-batch-micro-batch-streaming.md). Exploitation : [runbook](docs/runbook.md), section 7.
+
 ## Exigences du projet
 
 Le service doit respecter les exigences de [docs/exigences.md](docs/exigences.md), de S1 à S9.
@@ -58,12 +92,15 @@ Chaque rendu indique celles qu'il couvre et comment le vérifier.
 
 ```
 src/velov/
-  data.py          simulateur de données (remplacé par l'open data en S3, même schéma)
+  data.py          simulateur de données (même schéma que la table gold)
+  ingest.py        ingestion bronze : GBFS Vélo'v + Open-Meteo -> PostgreSQL (S3)
+  contract.py      contrat Pandera de la table gold, vérifié avant l'entraînement (S3)
   features.py      features partagées entraînement / API (anti training-serving skew)
   train.py         entraînement, baseline, artefact + metadata.json, option MLflow
   api/main.py      FastAPI : /health, /ready, /v1/model, /v1/predict, /v1/predict/batch
   api/schemas.py   contrat d'entrée / sortie (Pydantic)
-tests/             pytest (features, API)
+pipeline/          projet dbt : modèles silver et gold, contrat, tests (S3)
+tests/             pytest (features, API, contrat)
 docs/              templates : model card, runbook, ADR
 exercices/         démo pickle (S1)
 ```

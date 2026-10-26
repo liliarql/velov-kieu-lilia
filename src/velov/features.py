@@ -72,5 +72,10 @@ def make_training_frame(df: pd.DataFrame) -> pd.DataFrame:
     recevrait la première heure de la station suivante comme cible (fuite silencieuse).
     """
     out = add_features(df).sort_values(["station_id", "timestamp"])
-    out[TARGET] = out.groupby("station_id")["bikes_available"].shift(-1)
+    grouped = out.groupby("station_id")
+    out[TARGET] = grouped["bikes_available"].shift(-1)
+    # Données réelles : des heures manquent (collecte arrêtée, météo absente). La ligne suivante
+    # n'est la cible que si elle est exactement une heure plus tard, sinon on apprendrait H+5 en croyant H+1.
+    next_timestamp = grouped["timestamp"].shift(-1)
+    out.loc[next_timestamp != out["timestamp"] + pd.Timedelta(hours=1), TARGET] = None
     return out.dropna(subset=[TARGET]).reset_index(drop=True)
