@@ -1,8 +1,13 @@
 
 services:
   api:
-    build: .
-    image: velov-api:tp2
+    build:
+      context: .
+      args:
+        VERSION: "${VERSION:-1.0.0}"
+        GIT_COMMIT: "${GIT_COMMIT:-unknown}"
+    # Tag = version + commit, e.g. velov-api:1.0.0-15d8eaa
+    image: "velov-api:${VERSION:-1.0.0}-${GIT_COMMIT:-unknown}"
     ports:
       - "8002:8000"
     environment:

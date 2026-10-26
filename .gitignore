@@ -15,3 +15,5 @@ mlruns/
 # Secrets
 .env
 *.egg-info/
+# Clés SSH de la VM : jamais dans git
+ssh/

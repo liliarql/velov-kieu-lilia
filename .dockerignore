@@ -11,3 +11,5 @@ tests/
 docs/
 mlflow.db
 mlruns/
+ssh/
+models/
