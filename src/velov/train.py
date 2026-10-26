@@ -11,7 +11,8 @@ Usage :
 """
 
 from __future__ import annotations
-
+import duckdb
+from velov.contracts import StationHourly
 import argparse
 import hashlib
 import json
@@ -50,6 +51,12 @@ def sha256_of(path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
+def sha256_of_frame(df: pd.DataFrame) -> str:
+    ordered = df.sort_values(
+        ["station_id", "timestamp"]
+    )
+    content = ordered.to_csv(index=False).encode("utf-8")
+    return hashlib.sha256(content).hexdigest()
 
 def build_pipeline(seed: int = 42) -> Pipeline:
     preprocess = ColumnTransformer(
@@ -72,6 +79,54 @@ def temporal_split(df: pd.DataFrame, test_days: int) -> tuple[pd.DataFrame, pd.D
     return train, test
 
 
+def load_training_data(data_path: Path) -> pd.DataFrame:
+    """Charge CSV ou Gold DuckDB, puis valide Gold avec Pandera."""
+
+    if not data_path.exists():
+        raise FileNotFoundError(f"Source introuvable : {data_path}")
+
+    if data_path.suffix != ".duckdb":
+        # Ancien fonctionnement TP1-TP2 conservé
+        return pd.read_csv(data_path, parse_dates=["timestamp"])
+
+    # Nouveau fonctionnement TP3
+    with duckdb.connect(str(data_path.resolve()), read_only=True) as con:
+        raw = con.execute("""
+            SELECT
+                station_id,
+                timestamp,
+                capacity,
+                bikes_available,
+                temperature,
+                is_raining
+            FROM station_hourly
+            ORDER BY station_id, timestamp
+        """).df()
+
+    if raw.empty:
+        raise ValueError("Gold station_hourly est vide")
+
+    # On refuse les timestamps sans fuseau.
+    if not isinstance(raw["timestamp"].dtype, pd.DatetimeTZDtype):
+        raise ValueError("timestamp doit avoir un fuseau horaire")
+
+    # Normalisation explicite vers UTC, sans supprimer le fuseau.
+    raw["timestamp"] = (
+        raw["timestamp"]
+        .dt.tz_convert("UTC")
+        .astype("datetime64[us, UTC]")
+    )
+
+    # Validation avant tout calcul de features ou entraînement
+    raw = StationHourly.validate(raw, lazy=True)
+
+    print(f"Pandera PASS : {len(raw)} lignes Gold valides")
+    print(f"Stations : {raw['station_id'].nunique()}")
+    print(f"Heures distinctes : {raw['timestamp'].nunique()}")
+
+    return raw
+
+
 def train(
     data_path: Path,
     out_dir: Path,
@@ -80,10 +135,15 @@ def train(
     seed: int = 42,
 ) -> dict:
     """Entraîne, évalue contre une baseline, écrit l'artefact. Retourne les métadonnées."""
-    if not data_path.exists():
-        raise FileNotFoundError(f"{data_path} introuvable : lancer d'abord `python -m velov.data`")
+    raw = load_training_data(data_path)
 
-    raw = pd.read_csv(data_path, parse_dates=["timestamp"])
+    if data_path.suffix == ".duckdb" and raw["timestamp"].nunique() < 2:
+        raise ValueError(
+            "Contrat Pandera valide, mais historique Gold insuffisant "
+            "pour construire une cible H+1. "
+            "Continuer la collecte des données."
+        )
+
     frame = make_training_frame(raw)
     train_df, test_df = temporal_split(frame, test_days)
 
@@ -117,7 +177,11 @@ def train(
             "n_test": int(len(test_df)),
         },
         "artifact": {"file": MODEL_FILENAME, "sha256": sha256_of(model_path)},
-        "data_sha256": sha256_of(data_path),
+        "data_sha256": (
+            sha256_of_frame(raw)
+            if data_path.suffix == ".duckdb"
+            else sha256_of(data_path)
+            ),
         "runtime": {
             "python": platform.python_version(),
             "scikit-learn": sklearn.__version__,

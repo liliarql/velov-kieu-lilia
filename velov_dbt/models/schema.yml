@@ -1,0 +1,46 @@
+
+version: 2
+
+models:
+  - name: station_hourly
+    description: "Table Gold horaire pour l'entraînement Vélo'v"
+
+    config:
+      materialized: table
+      contract:
+        enforced: true
+
+    columns:
+      - name: station_id
+        data_type: integer
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_station_information')
+                field: station_id
+
+      - name: timestamp
+        data_type: "timestamp with time zone"
+        data_tests:
+          - not_null
+
+      - name: capacity
+        data_type: integer
+        data_tests:
+          - not_null
+
+      - name: bikes_available
+        data_type: integer
+        data_tests:
+          - not_null
+
+      - name: temperature
+        data_type: double
+        data_tests:
+          - not_null
+
+      - name: is_raining
+        data_type: boolean
+        data_tests:
+          - not_null
