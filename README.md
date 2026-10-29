@@ -1,249 +1,171 @@
-# TP3 – Pipeline de données Vélo'v
+# TP3 - Pipeline de donnees Velo'v
 
-## 1. Objectif
+Pipeline ELT local : GBFS + Open-Meteo -> Bronze JSON -> Silver dbt -> candidat Gold -> tests -> Gold public DuckDB -> Pandera -> entrainement H+1.
 
-L'objectif du TP3 est de remplacer les données simulées utilisées lors des premières séances par des données réelles du réseau Vélo'v de la Métropole de Lyon.
+## Installation depuis une copie propre
 
-Le pipeline suit une architecture **Bronze → Silver → Gold** avec DuckDB et dbt, afin de produire une table d'entraînement fiable, reproductible et conforme à un contrat de données.
-
-## 2. Sources de données
-
-**Données Vélo'v**
-
-- Fournisseur : Métropole de Lyon / JCDecaux
-- Format : GBFS v2.3
-- URL : https://download.data.grandlyon.com/files/rdata/jcd_jcdecaux.jcdvelov/gbfs.json
-- Flux utilisés :
-  - `station_status` : vélos disponibles, état des stations et horodatages
-  - `station_information` : identifiant, capacité et localisation des stations
-
-**Données météorologiques**
-
-- Source : Open-Meteo
-- Variables : `temperature_2m` et `rain`
-- Les données sont conservées avec leur horodatage de validité et leur date de collecte.
-
-## 3. Architecture
-
-```text
-API GBFS Grand Lyon        API Open-Meteo
-        |                        |
-        v                        v
-    ingest.py             weather_ingest.py
-        |                        |
-        +-----------+------------+
-                    |
-                    v
-              BRONZE (JSON)
-                    |
-                    v
-              dbt + DuckDB
-                    |
-                    v
-                  SILVER
-       stg_station_status
-       stg_station_information
-       stg_weather
-                    |
-                    v
-                   GOLD
-               station_hourly
-                    |
-                    v
-          Contrat dbt + Data tests
-                    |
-                    v
-       Validation Pandera / Training
-```
-
-### Bronze
-
-Les réponses JSON des API sont conservées sans transformation métier dans `data/bronze/`.
-
-L'ingestion est idempotente : un même snapshot ne doit pas être enregistré deux fois. Les fichiers sont identifiés à partir des informations de la source et d'une empreinte SHA-256.
-
-### Silver
-
-Les modèles dbt permettent de :
-
-- Convertir les types de données.
-- Normaliser les horodatages en UTC.
-- Dédupliquer les relevés.
-- Conserver l'historique utile des stations.
-- Préparer les données météorologiques.
-
-### Gold
-
-Le modèle `station_hourly` produit une ligne par station et par heure avec les six colonnes contractuelles :
-
-| Colonne | Type |
-|---|---|
-| `station_id` | INTEGER |
-| `timestamp` | TIMESTAMPTZ |
-| `capacity` | INTEGER |
-| `bikes_available` | INTEGER |
-| `temperature` | DOUBLE |
-| `is_raining` | BOOLEAN |
-
-Le modèle utilise uniquement les relevés connus à l'instant considéré afin d'éviter les fuites de données futures (*data leakage*).
-
-Le contrat dbt est activé avec `contract: enforced: true`.
-
-## 4. Installation
-
-Depuis la racine du dépôt :
+Environnement de reference : **Linux/WSL, Python 3.14.4**. Le projet declare Python >=3.11 ; les autres versions ne sont pas encore validees pour ce TP3. Docker n'est pas necessaire au TP3.
 
 ```bash
-python3 -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
-
 python -m pip install -r requirements-dev.txt
 python -m pip install -e .
-```
-
-Vérifier l'installation :
-
-```bash
+python -m pip check
 dbt --version
 ```
 
-## 5. Reproduction du TP3 avec les données de démonstration
+`requirements.txt` contient le serving, `requirements-pipeline.txt` les versions du pipeline ; `requirements-dev.txt` inclut les deux, pytest, Ruff et MLflow. Le serving peut importer ses utilitaires sans installer DuckDB/Pandera.
 
-Un jeu de données Bronze est fourni dans `data/demo/bronze/` afin de reproduire les transformations sans dépendre des API en temps réel.
+## Pipeline : demonstration reproductible
 
-Depuis la racine du dépôt :
+Le Bronze versionne est dans `data/demo/bronze/` : 19 fichiers reels archives, **36 lignes Gold et une seule heure** au cutoff ci-dessous. Il permet de verifier le pipeline, pas d'entrainer/evaluer H+1. Le jeu pedagogique de 48 h mentionne dans les notes du cours a ete retrouve sur le depot enseignant ; ce petit jeu reel ne lui est pas equivalent. La provenance et les differences de format/disponibilite sont expliquees dans `docs/audit-s3.md`.
 
-```bash
-bash scripts/setup_tp3_demo.sh
-```
-
-Puis :
+Ne pas melanger la demonstration et la collecte reelle. Depuis la racine :
 
 ```bash
+source .venv/bin/activate
+export VELOV_DB_PATH='../data/demo.duckdb'
 cd velov_dbt
-
 dbt debug --profiles-dir .
-
 dbt build --profiles-dir . \
-  --vars '{"as_of": "2026-10-26T16:20:00+01:00"}'
+  --vars '{"as_of":"2026-10-26T16:20:00+01:00","bronze_dir":"../data/demo/bronze"}'
+cd ..
+python -m velov.train --data data/demo.duckdb --validate-only
+unset VELOV_DB_PATH
 ```
 
-Afficher les résultats :
+Le chemin du profil est relatif a `velov_dbt/`. La variable `bronze_dir` peut aussi etre absolue. Le cutoff `as_of` est explicite et les calculs DuckDB sont en UTC.
+
+Les resultats verifies et les limites sont dans [docs/validation-tp3.md](docs/validation-tp3.md).
+
+## Demo synthetique 48 h : pipeline complet et training H+1
+
+Cette simulation deterministe reutilise le simulateur du projet : 20 stations, 48 heures, graine 42. Les heures de disponibilite sont des **hypotheses de simulation** explicites, pas des collectes historiques. Elle reste dans `data/demo48h/`, separee des archives reelles. Le manifeste indique la source synthetique et le cutoff.
 
 ```bash
-dbt show --select station_hourly --limit 10 --profiles-dir . \
-  --vars '{"as_of": "2026-10-26T16:20:00+01:00"}'
+# Racine du depot, environnement active
+python -m velov.demo --out data/demo48h
+export VELOV_DB_PATH='../data/demo48h/demo.duckdb'
+cd velov_dbt
+dbt build --profiles-dir . \
+  --vars '{"as_of":"2026-10-06T23:00:00Z","bronze_dir":"../data/demo48h/bronze"}'
+cd ..
+python -m velov.train --data data/demo48h/demo.duckdb --validate-only
+python -m velov.train --data data/demo48h/demo.duckdb --out data/demo48h/models --test-days 1
+unset VELOV_DB_PATH
 ```
 
-Cette procédure a été testée depuis un clone propre du dépôt.
+Resultat attendu : 960 lignes Gold, 48 heures, 940 exemples H+1 avant split (460 train, 480 test). Les artefacts de demonstration sont `data/demo48h/models/model.joblib` et `metadata.json`. Ils restent ignores par Git. Deux jours permettent de verifier le fonctionnement, pas d'etablir une performance de production ou de reserver 14 jours de test. La generation refuse de remplacer un fichier different ; relancer avec la meme version/graine garde exactement le meme contenu.
 
-**Résultat obtenu :**
+## Collecte reelle et recalcul
 
-```text
-PASS=14 WARN=0 ERROR=0 SKIP=0 TOTAL=14
-```
-
-Soit 4 modèles dbt et 10 tests de qualité exécutés avec succès.
-
-## 6. Collecte des données en temps réel
-
-Depuis la racine du dépôt :
+GBFS : https://download.data.grandlyon.com/files/rdata/jcd_jcdecaux.jcdvelov/gbfs.json ; feeds `station_status` et `station_information`. Meteo : https://api.open-meteo.com/v1/forecast, temperature et pluie courantes a Lyon.
 
 ```bash
+# Racine du depot, environnement active
 python -m velov.ingest
 python -m velov.weather_ingest
+cd velov_dbt
+dbt build --profiles-dir . --vars '{"as_of":"2026-10-29T12:00:00Z"}'
+cd ..
+python -m velov.train --data data/velov.duckdb --validate-only
+# Seulement apres avoir collecte assez d'historique :
+python -m velov.train --data data/velov.duckdb --out models/ --test-days 14
 ```
 
-Les nouveaux snapshots sont enregistrés dans `data/bronze/`. Les données de collecte réelles ne sont pas versionnées dans Git ; seul le jeu de démonstration est inclus.
+Adapter le cutoff a la periode voulue. Sans `as_of`, dbt utilise le debut du run. La collecte GBFS refuse un `last_updated` absent/invalide avant d'ecrire. Un snapshot valide rejoue a l'identique garde le meme nom (heure source + SHA-256 du JSON canonique). Les publications Bronze utilisent un fichier temporaire puis un lien atomique. La meteo conserve sa premiere date de collecte ; rejouer les memes valeurs ne la reecrit pas.
 
-La collecte périodique sur la VM Proxmox reste à déployer lorsque l'environnement sera de nouveau disponible.
+**VM : hors de cette correction, indisponible et non verifiee.** Aucune collecte automatique distante n'est annoncee comme operationnelle.
 
-## 7. Qualité et contrats
+## Contrat et publication Gold
 
-Les contrôles mis en place incluent :
+| Colonne | Type | Regle |
+|---|---|---|
+| station_id | INTEGER | > 0 |
+| timestamp | TIMESTAMPTZ | UTC, cle avec station_id |
+| capacity | INTEGER | 1 a 80 |
+| bikes_available | INTEGER | 0 a capacity |
+| temperature | DOUBLE | -25 a 50 |
+| is_raining | BOOLEAN | non null |
 
-- `not_null` : vérification des colonnes obligatoires.
-- `relationships` : cohérence des identifiants de station.
-- Contrôle de capacité : `0 <= bikes_available <= capacity`.
-- Unicité de `(station_id, timestamp)`.
-- Vérification de la présence de données Gold.
-- Contrat dbt appliqué à la publication de la table.
+Les cinq modeles dbt sont les trois stagings sources, `stg_status_checked` (ASOF capacity connue a l'heure de prediction) et `station_hourly`.
 
-### EX-10 – Idempotence
+**`ref('station_hourly')` designe physiquement `main.station_hourly_candidate`.** Le contrat dbt enforced porte sur ce candidat. Les tests Silver detectent les anomalies avant Gold, avec **`error_if='>0'`** : une anomalie suffit a bloquer. `store_failures` conserve les lignes dans `main_dbt_test__audit` ; le log donne le nombre d'erreurs. Ce choix strict evite de masquer des erreurs dans un petit jeu d'apprentissage. Aucun seuil de 10 n'est impose par le sujet.
 
-Le pipeline peut être rejoué avec un paramètre `as_of` fixe. La stabilité du résultat Gold est contrôlée en comparant les empreintes SHA-256 de deux exécutions sur le même Bronze.
+Le hook `publish_gold` n'execute `CREATE OR REPLACE TABLE main.station_hourly AS SELECT ...` qu'apres un **`dbt build` complet dont tous les modeles et tests ont reussi**. La copie est une instruction transactionnelle DuckDB. Echec source, schema, type, test Gold ou build partiel : Gold precedent conserve ; sans version precedente, aucune table publique creee. Le candidat reste un artefact interne, qui peut etre invalide apres `dbt run`.
 
-### EX-11 – Point-in-time correctness
-
-Le Gold utilise des jointures temporelles pour éviter l'utilisation de données qui n'étaient pas encore disponibles à l'instant de prédiction.
-
-Le contrôle effectué sur 36 lignes Gold a donné :
-
-```text
-invalid_status        = 0
-invalid_capacity_join = 0
-invalid_weather       = 0
-future_rows           = 0
-```
-
-### EX-12 – Contrat et publication
-
-Le schéma Gold est vérifié avec `contract: enforced: true` et les règles métier sont contrôlées par les tests dbt.
-
-Un test négatif complet du blocage de publication reste à réaliser.
-
-## 8. Validation Pandera
-
-Le module `velov.contracts` définit le contrat `StationHourly`.
-
-Pour valider la table Gold sans entraîner le modèle :
+Les lecteurs (dont `train.py`) utilisent exclusivement **`main.station_hourly`**. `dbt run`, `dbt test` et les selections partielles ne publient pas. `dbt show --select station_hourly` concerne le candidat, pas la copie publique. Pour lire Gold public :
 
 ```bash
-python -m velov.train \
-  --data data/velov.duckdb \
-  --validate-only
+python -c "import duckdb; c=duckdb.connect('data/demo.duckdb', read_only=True); print(c.sql('select * from main.station_hourly limit 10'))"
 ```
 
-L'entraînement H+1 nécessite un historique suffisant pour calculer la cible et réaliser une séparation temporelle train/test.
+Les regles SQL et Pandera sont alignees. L'entrainement valide avant de calculer les features. Une cible n'est gardee que si l'observation suivante est exactement H+1 (heures UTC ecoulees), y compris au changement d'heure.
 
-## 9. Runbook – Procédures de reprise
-
-**Échec de la collecte**
-
-Vérifier l'accessibilité des API, les erreurs HTTP et les logs d'ingestion. Relancer ensuite le script concerné. L'idempotence évite de dupliquer les snapshots déjà enregistrés.
-
-**Échec de dbt**
-
-Depuis `velov_dbt/` :
+## Verification EX-10, EX-11, EX-12
 
 ```bash
-dbt debug --profiles-dir .
-dbt build --profiles-dir .
+python -m pytest -q
+python -m ruff check src tests
+# Preuves dbt seules, sur copies temporaires et sans API reseau :
+python -m pytest tests/test_pipeline.py -q
+# Verification complete incluant les commandes du README sur base jetable :
+bash scripts/verify_tp3.sh
 ```
 
-Examiner le modèle ou le test en erreur avant toute nouvelle publication.
+- Bronze : replay identique -> un seul fichier ; timestamp invalide -> aucune ecriture.
+- EX-10 : deux vrais builds, comparaison SHA-256 du contenu Gold trie, jamais du fichier DuckDB.
+- EX-11 : ajout de corrections GBFS/meteo connues apres la prediction -> Gold passe identique.
+- EX-12 : injections de valeurs invalides, schema/type incorrects -> echec et contenu Gold public inchange ; premier build invalide -> aucune publication.
 
-**Recalcul depuis Bronze**
+[Exigences](docs/exigences.md), [runbook](docs/runbook.md), [ADR pipeline](docs/adr/0002-pipeline-micro-batch.md), [declaration IA et exercice S3](docs/audit-s3.md), [explication des modeles](docs/preparation-orale-tp3.md).
 
-Les modèles Silver et Gold peuvent être recalculés à partir des fichiers Bronze conservés.
+## API et Docker (TP1/TP2)
 
-Une période absente de la collecte GBFS en temps réel ne peut pas être reconstruite si aucun snapshot historique n'a été archivé.
+Le petit Bronze TP3 ne permet pas de produire un modele. Pour une demonstration API, generer explicitement des donnees **synthetiques** :
 
-## 10. Choix techniques – ADR
+```bash
+python -m velov.data --help
+python -m velov.data --days 30 --out data/velov_history.csv
+python -m velov.train --data data/velov_history.csv --out models/
+uvicorn velov.api.main:app --host 127.0.0.1 --port 8000
+# Autre terminal :
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/ready
+```
 
-Nous utilisons une architecture **ELT avec micro-batch**.
+Pour Docker, creer `.env` local avec `POSTGRES_PASSWORD=<mot-de-passe-local>`, puis :
 
-- **DuckDB** : base analytique locale, sans serveur supplémentaire.
-- **dbt** : transformations SQL versionnées, tests et contrats.
-- **Bronze JSON** : conservation des données sources pour le rejeu.
-- **Micro-batch de 5 minutes** : fréquence adaptée à une prédiction horaire, sans la complexité d'une infrastructure de streaming.
-- **Alternative écartée** : streaming Kafka/Redpanda, non nécessaire pour ce besoin horaire.
+```bash
+docker compose up --build -d
+curl http://127.0.0.1:8002/ready
+docker compose logs --tail=100 api db
+docker compose down
+```
 
-Selon l'estimation présentée dans le cours S3, la collecte Vélo'v toutes les cinq minutes représente environ 25 Mo de JSON par jour, soit de l'ordre de 10 Go par an avant compression. Cette estimation concerne le flux Vélo'v et non les données météo.
+Le modele et `metadata.json` doivent exister avant le build de l'image. Ne pas versionner `.env`. Le Dockerfile utilise Python 3.12 par defaut ; pour servir un artefact entraine avec l'environnement de reference, construire avec `docker compose build --build-arg PYTHON_IMAGE=python:3.14-slim`. Docker n'a pas ete revalide dans cette correction locale.
 
-## 11. Limites actuelles
+## Rendu TP3
 
-- L'historique collecté est encore court pour entraîner et évaluer correctement un modèle H+1.
-- La collecte automatique sur VM Proxmox n'est pas encore opérationnelle.
-- Un test négatif complet du mécanisme de publication EX-12 reste à effectuer.
-- La procédure de démonstration utilise un jeu Bronze fixe pour rendre la correction reproductible.
+Branche de rendu : `tp3-minh-dung` sur le fork `liliarql/velov-kieu-lilia`. Le tag annote `tp3` doit designer le commit final de cette branche. Verification des references :
+
+```bash
+git rev-parse HEAD
+git rev-parse 'tp3^{commit}'
+git ls-remote origin refs/heads/tp3-minh-dung refs/tags/tp3 'refs/tags/tp3^{}'
+```
+
+Verification depuis un clone independant :
+
+```bash
+git clone --branch tp3 https://github.com/liliarql/velov-kieu-lilia.git velov-tp3-check
+cd velov-tp3-check
+python3.14 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+python -m pip install -e .
+bash scripts/verify_tp3.sh
+```
+
+Le rapport `docs/validation-tp3.md` distingue les verifications effectuees, le jeu reel d'une heure et la simulation 48 h. VM indisponible : exclue de cette validation.

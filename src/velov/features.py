@@ -73,4 +73,6 @@ def make_training_frame(df: pd.DataFrame) -> pd.DataFrame:
     """
     out = add_features(df).sort_values(["station_id", "timestamp"])
     out[TARGET] = out.groupby("station_id")["bikes_available"].shift(-1)
-    return out.dropna(subset=[TARGET]).reset_index(drop=True)
+    next_timestamp = out.groupby("station_id")["timestamp"].shift(-1)
+    exact_hour = next_timestamp == out["timestamp"] + pd.Timedelta(hours=1)
+    return out.loc[exact_hour].dropna(subset=[TARGET]).reset_index(drop=True)

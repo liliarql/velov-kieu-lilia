@@ -4,7 +4,7 @@ WITH bronze AS (
         last_updated,
         UNNEST(data.stations) AS station
     FROM read_json_auto(
-        '../data/bronze/station_status/dt=*/*.json'
+        '{{ var("bronze_dir", "../data/bronze") }}/station_status/dt=*/*.json'
     )
 ),
 

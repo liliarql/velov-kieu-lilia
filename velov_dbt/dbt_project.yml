@@ -5,6 +5,9 @@ config-version: 2
 
 profile: velov
 
+on-run-end:
+  - "{{ publish_gold(results) }}"
+
 model-paths: ["models"]
 test-paths: ["tests"]
 

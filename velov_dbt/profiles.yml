@@ -4,5 +4,7 @@ velov:
   outputs:
     dev:
       type: duckdb
-      path: ../data/velov.duckdb
+      path: "{{ env_var('VELOV_DB_PATH', '../data/velov.duckdb') }}"
+      settings:
+        TimeZone: UTC
       threads: 4

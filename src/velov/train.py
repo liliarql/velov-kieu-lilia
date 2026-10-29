@@ -11,8 +11,7 @@ Usage :
 """
 
 from __future__ import annotations
-import duckdb
-from velov.contracts import StationHourly
+
 import argparse
 import hashlib
 import json
@@ -51,12 +50,12 @@ def sha256_of(path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
+
 def sha256_of_frame(df: pd.DataFrame) -> str:
-    ordered = df.sort_values(
-        ["station_id", "timestamp"]
-    )
+    ordered = df.sort_values(["station_id", "timestamp"])
     content = ordered.to_csv(index=False).encode("utf-8")
     return hashlib.sha256(content).hexdigest()
+
 
 def build_pipeline(seed: int = 42) -> Pipeline:
     preprocess = ColumnTransformer(
@@ -89,6 +88,11 @@ def load_training_data(data_path: Path) -> pd.DataFrame:
         # Ancien fonctionnement TP1-TP2 conservé
         return pd.read_csv(data_path, parse_dates=["timestamp"])
 
+    # Imports locaux : le serving ne requiert pas les dependances de pipeline.
+    import duckdb
+
+    from velov.contracts import StationHourly
+
     # Nouveau fonctionnement TP3
     with duckdb.connect(str(data_path.resolve()), read_only=True) as con:
         raw = con.execute("""
@@ -111,11 +115,7 @@ def load_training_data(data_path: Path) -> pd.DataFrame:
         raise ValueError("timestamp doit avoir un fuseau horaire")
 
     # Normalisation explicite vers UTC, sans supprimer le fuseau.
-    raw["timestamp"] = (
-        raw["timestamp"]
-        .dt.tz_convert("UTC")
-        .astype("datetime64[us, UTC]")
-    )
+    raw["timestamp"] = raw["timestamp"].dt.tz_convert("UTC").astype("datetime64[us, UTC]")
 
     # Validation avant tout calcul de features ou entraînement
     raw = StationHourly.validate(raw, lazy=True)
@@ -177,11 +177,7 @@ def train(
             "n_test": int(len(test_df)),
         },
         "artifact": {"file": MODEL_FILENAME, "sha256": sha256_of(model_path)},
-        "data_sha256": (
-            sha256_of_frame(raw)
-            if data_path.suffix == ".duckdb"
-            else sha256_of(data_path)
-            ),
+        "data_sha256": (sha256_of_frame(raw) if data_path.suffix == ".duckdb" else sha256_of(data_path)),
         "runtime": {
             "python": platform.python_version(),
             "scikit-learn": sklearn.__version__,
@@ -189,7 +185,7 @@ def train(
             "numpy": np.__version__,
         },
     }
-    (out_dir / METADATA_FILENAME).write_text(json.dumps(metadata, indent=2, ensure_ascii=False),encoding= "utf-8")
+    (out_dir / METADATA_FILENAME).write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
     return metadata
 
 
@@ -235,9 +231,17 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=Path("models"))
     parser.add_argument("--version", default="0.1.0")
     parser.add_argument("--mlflow", action="store_true", help="journaliser aussi dans MLflow")
+    parser.add_argument("--validate-only", action="store_true", help="valider Gold sans entrainer ni ecrire de modele")
+    parser.add_argument("--test-days", type=int, default=14)
     args = parser.parse_args()
 
-    metadata = train(args.data, args.out, version=args.version)
+    if args.validate_only:
+        if args.data.suffix != ".duckdb":
+            parser.error("--validate-only necessite une table Gold .duckdb")
+        load_training_data(args.data)
+        return
+
+    metadata = train(args.data, args.out, version=args.version, test_days=args.test_days)
     m = metadata["metrics"]
     print(f"MAE modèle   : {m['mae_model']:.3f} vélos")
     print(f"MAE baseline : {m['mae_baseline_persistence']:.3f} vélos (persistance)")

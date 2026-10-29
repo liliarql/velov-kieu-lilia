@@ -46,3 +46,20 @@ def test_target_is_shifted_per_station_without_leakage():
     assert frame.groupby("station_id").size().tolist() == [47, 47]
     s1 = frame[frame["station_id"] == "1"].reset_index(drop=True)
     assert (s1[TARGET].iloc[:-1].to_numpy() == s1["bikes_available"].iloc[1:].to_numpy()).all()
+
+
+def test_target_requires_exactly_one_hour():
+    df = simulate(days=2, n_stations=2)
+    # Les stations ont un trou entre la premiere et la troisieme observation.
+    df = df.groupby("station_id").head(3)
+    missing = df.groupby("station_id").nth(1).index
+    df = df.drop(index=missing)
+    assert make_training_frame(df).empty
+
+
+def test_target_handles_dst_with_elapsed_utc_hour():
+    df = simulate(days=2, n_stations=1).head(3).copy()
+    df["timestamp"] = pd.to_datetime(["2026-10-25T00:00Z", "2026-10-25T01:00Z", "2026-10-25T02:00Z"])
+    frame = make_training_frame(df)
+    assert len(frame) == 2
+    assert frame["hour"].tolist() == [2, 2]

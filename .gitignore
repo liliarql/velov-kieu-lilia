@@ -7,6 +7,8 @@ __pycache__/
 # Données et artefacts : jamais dans git (régénérables, volumineux, parfois sensibles)
 data/*
 !data/.gitkeep
+!data/demo/
+!data/demo/**
 models/*
 !models/.gitkeep
 mlflow.db
@@ -25,6 +27,7 @@ data/*.duckdb.wal
 velov_dbt/target/
 velov_dbt/logs/
 velov_dbt/dbt_packages/
+.user.yml
 
 # Python
 __pycache__/

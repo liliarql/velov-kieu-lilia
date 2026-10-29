@@ -8,7 +8,7 @@ WITH bronze AS (
         ) AS temperature,
         CAST(response.current.rain AS DOUBLE) AS rain_mm
     FROM read_json_auto(
-        '../data/bronze/weather/dt=*/*.json'
+        '{{ var("bronze_dir", "../data/bronze") }}/weather/dt=*/*.json'
     )
 ),
 
@@ -20,11 +20,7 @@ typed AS (
         CAST(rain_mm > 0 AS BOOLEAN) AS is_raining,
         rain_mm
     FROM bronze
-    WHERE weather_epoch IS NOT NULL
-      AND collected_at_epoch IS NOT NULL
-      AND temperature IS NOT NULL
-      AND rain_mm IS NOT NULL
-      AND rain_mm >= 0
+
 )
 
 SELECT DISTINCT
@@ -34,4 +30,3 @@ SELECT DISTINCT
     is_raining,
     rain_mm
 FROM typed
-WHERE valid_at <= collected_at

@@ -1,4 +1,3 @@
-
 """Collecte météo Lyon pour TP3 - Bronze idempotent."""
 
 import hashlib
@@ -6,7 +5,7 @@ import json
 import logging
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import requests
@@ -57,10 +56,8 @@ def fetch_weather():
 def save_weather(data):
     current = data["current"]
 
-    valid_time = datetime.fromtimestamp(
-        current["time"], tz=timezone.utc
-    )
-    collected_at = int(datetime.now(timezone.utc).timestamp())
+    valid_time = datetime.fromtimestamp(current["time"], tz=UTC)
+    collected_at = int(datetime.now(UTC).timestamp())
 
     # Identité du snapshot : heure et valeurs météo.
     key_data = {
@@ -70,16 +67,12 @@ def save_weather(data):
         "latitude": PARAMS["latitude"],
         "longitude": PARAMS["longitude"],
     }
-    digest = hashlib.sha256(
-        json.dumps(key_data, sort_keys=True).encode("utf-8")
-    ).hexdigest()
+    digest = hashlib.sha256(json.dumps(key_data, sort_keys=True).encode("utf-8")).hexdigest()
 
     folder = BRONZE_DIR / f"dt={valid_time:%Y-%m-%d}"
     folder.mkdir(parents=True, exist_ok=True)
 
-    target = folder / (
-        f"{valid_time:%Y%m%dT%H%M%SZ}_{digest}.json"
-    )
+    target = folder / (f"{valid_time:%Y%m%dT%H%M%SZ}_{digest}.json")
 
     if target.exists():
         return target, False

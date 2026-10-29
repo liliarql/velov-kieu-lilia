@@ -18,6 +18,10 @@ qui dit oui ou non.
 | EX-08 | Chaque prédiction est traçable | Entrées, sortie, version du modèle et horodatage UTC journalisés en base | S2 |
 | EX-09 | Un autre binôme peut exploiter le service avec le README et le runbook | Revue croisée : démarrer, vérifier la santé, arrêter, diagnostiquer `/ready` en 503 | S2, S9 |
 
+| EX-10 | Rejouer la meme periode ne change pas Gold | `python -m pytest tests/test_pipeline.py -k ex10 -q` : deux builds, hash du contenu trie identique | S3 |
+| EX-11 | Aucune feature ne depend d'une information connue apres la prediction | `python -m pytest tests/test_pipeline.py -k ex11 -q` : arrivees tardives GBFS/meteo, Gold passe inchange | S3 |
+| EX-12 | Un Gold hors contrat n'est jamais publie | `python -m pytest tests/test_pipeline.py -k ex12 -q` : valeurs/schema/types invalides, Gold precedent intact ; premier echec sans publication | S3 |
+
 ## Conventions associées
 
 - **Horodatage** : les instants sont échangés et stockés en UTC, avec fuseau explicite (ISO 8601).

@@ -1,4 +1,3 @@
-
 """TP3 - Ingestion bronze GBFS Grand Lyon (idempotente)."""
 
 from __future__ import annotations
@@ -9,7 +8,7 @@ import json
 import logging
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -17,8 +16,7 @@ import requests
 
 GBFS_URL = os.getenv(
     "GBFS_URL",
-    "https://download.data.grandlyon.com/files/rdata/"
-    "jcd_jcdecaux.jcdvelov/gbfs.json",
+    "https://download.data.grandlyon.com/files/rdata/jcd_jcdecaux.jcdvelov/gbfs.json",
 )
 
 BRONZE_DIR = Path(os.getenv("BRONZE_DIR", "data/bronze"))
@@ -79,9 +77,7 @@ def discover_feeds(discovery: dict) -> dict[str, str]:
     urls = {
         item["name"]: urljoin(GBFS_URL, item["url"])
         for item in feeds
-        if isinstance(item, dict)
-        and isinstance(item.get("name"), str)
-        and isinstance(item.get("url"), str)
+        if isinstance(item, dict) and isinstance(item.get("name"), str) and isinstance(item.get("url"), str)
     }
 
     missing = set(FEEDS) - set(urls)
@@ -96,15 +92,16 @@ def parse_source_time(payload: dict) -> datetime:
     value = payload.get("last_updated")
 
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        result = datetime.fromtimestamp(value, tz=timezone.utc)
+        try:
+            result = datetime.fromtimestamp(value, tz=UTC)
+        except (ValueError, OverflowError, OSError) as exc:
+            raise ValueError("last_updated hors limites") from exc
 
     elif isinstance(value, str):
-        result = datetime.fromisoformat(
-            value.replace("Z", "+00:00")
-        )
+        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
         if result.tzinfo is None:
             raise ValueError("last_updated sans fuseau horaire")
-        result = result.astimezone(timezone.utc)
+        result = result.astimezone(UTC)
 
     else:
         raise ValueError("last_updated manquant ou invalide")
@@ -134,27 +131,14 @@ def save_bronze(payload: dict, feed_name: str) -> tuple[Path, bool]:
     content = canonical_json(payload)
     digest = hashlib.sha256(content).hexdigest()
 
-    try:
-        timestamp = parse_source_time(payload)
-    except ValueError:
-        # Repli si le fournisseur omet last_updated :
-        # date de collecte UTC, identité garantie par le hash.
-        timestamp = datetime.now(timezone.utc)
-        logger.warning(
-            "%s: last_updated absent, utilisation de l'heure UTC",
-            feed_name,
-        )
+    # Refuser sans heure source : aucun fallback sur l'heure de collecte.
+    # Cette validation precede toute creation de fichier ou dossier Bronze.
+    timestamp = parse_source_time(payload)
 
-    target_dir = (
-        BRONZE_DIR
-        / feed_name
-        / f"dt={timestamp:%Y-%m-%d}"
-    )
+    target_dir = BRONZE_DIR / feed_name / f"dt={timestamp:%Y-%m-%d}"
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    target = target_dir / (
-        f"{timestamp:%Y%m%dT%H%M%SZ}_{digest}.json"
-    )
+    target = target_dir / (f"{timestamp:%Y%m%dT%H%M%SZ}_{digest}.json")
 
     if target.exists():
         return target, False
