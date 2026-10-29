@@ -11,7 +11,7 @@ Usage :
 """
 
 from __future__ import annotations
-import subprocess
+
 import argparse
 import hashlib
 import json
@@ -52,24 +52,35 @@ def sha256_of(path: Path) -> str:
 
 
 def sha256_of_frame(df: pd.DataFrame) -> str:
-    ordered = df.sort_values(["station_id", "timestamp"])
-    content = ordered.to_csv(index=False).encode("utf-8")
-    return hashlib.sha256(content).hexdigest()
+    """Empreinte du contenu normalise, independante du fichier CSV/DuckDB."""
+    ordered = df[RAW_COLUMNS].copy()
+    if not isinstance(ordered["timestamp"].dtype, pd.DatetimeTZDtype):
+        raise ValueError("timestamp doit avoir un fuseau horaire")
+    ordered["timestamp"] = ordered["timestamp"].dt.tz_convert("UTC").astype("datetime64[us, UTC]")
+    for column in ("station_id", "capacity", "bikes_available"):
+        ordered[column] = ordered[column].astype("int64")
+    ordered["temperature"] = ordered["temperature"].astype("float64")
+    ordered["is_raining"] = ordered["is_raining"].astype(bool)
+    ordered = ordered.sort_values(["station_id", "timestamp"])
+    values = pd.util.hash_pandas_object(ordered, index=False).to_numpy().tobytes()
+    return hashlib.sha256(values).hexdigest()
 
 
-def build_pipeline(seed: int = 42) -> Pipeline:
+def build_pipeline(seed: int = 42, learning_rate: float = 0.1, max_iter: int = 200) -> Pipeline:
     preprocess = ColumnTransformer(
         [
             ("station", OneHotEncoder(handle_unknown="ignore"), CATEGORICAL_FEATURES),
             ("num", "passthrough", NUMERIC_FEATURES),
         ]
     )
-    model = HistGradientBoostingRegressor(max_iter=200, learning_rate=0.1, random_state=seed)
+    model = HistGradientBoostingRegressor(max_iter=max_iter, learning_rate=learning_rate, random_state=seed)
     return Pipeline([("preprocess", preprocess), ("model", model)])
 
 
 def temporal_split(df: pd.DataFrame, test_days: int) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Découpage temporel : on teste sur le futur, jamais sur un échantillon aléatoire."""
+    if test_days <= 0:
+        raise ValueError("test_days doit etre strictement positif")
     cutoff = pd.to_datetime(df["timestamp"]).max() - pd.Timedelta(days=test_days)
     ts = pd.to_datetime(df["timestamp"])
     train, test = df[ts <= cutoff], df[ts > cutoff]
@@ -79,52 +90,44 @@ def temporal_split(df: pd.DataFrame, test_days: int) -> tuple[pd.DataFrame, pd.D
 
 
 def load_training_data(data_path: Path) -> pd.DataFrame:
-    """Charge CSV ou Gold DuckDB, puis valide Gold avec Pandera."""
-
+    """Charge CSV ou Gold DuckDB ; valide le Gold avant tout calcul de features."""
     if not data_path.exists():
         raise FileNotFoundError(f"Source introuvable : {data_path}")
-
     if data_path.suffix != ".duckdb":
-        # Ancien fonctionnement TP1-TP2 conservé
-        return pd.read_csv(data_path, parse_dates=["timestamp"])
+        # round_trip preserve les flottants du CSV pour la meme empreinte de table.
+        raw = pd.read_csv(data_path, parse_dates=["timestamp"], float_precision="round_trip")
+    else:
+        # Imports locaux : aucune dependance pipeline ajoutee au serving.
+        import duckdb
 
-    # Imports locaux : le serving ne requiert pas les dependances de pipeline.
-    import duckdb
-
-    from velov.contracts import StationHourly
-
-    # Nouveau fonctionnement TP3
-    with duckdb.connect(str(data_path.resolve()), read_only=True) as con:
-        raw = con.execute("""
-            SELECT
-                station_id,
-                timestamp,
-                capacity,
-                bikes_available,
-                temperature,
-                is_raining
-            FROM station_hourly
-            ORDER BY station_id, timestamp
-        """).df()
-
+        with duckdb.connect(str(data_path.resolve()), read_only=True) as con:
+            raw = con.execute("SELECT * FROM main.station_hourly ORDER BY station_id, timestamp").df()
     if raw.empty:
-        raise ValueError("Gold station_hourly est vide")
-
-    # On refuse les timestamps sans fuseau.
+        raise ValueError("Source d'entrainement vide")
     if not isinstance(raw["timestamp"].dtype, pd.DatetimeTZDtype):
         raise ValueError("timestamp doit avoir un fuseau horaire")
-
-    # Normalisation explicite vers UTC, sans supprimer le fuseau.
     raw["timestamp"] = raw["timestamp"].dt.tz_convert("UTC").astype("datetime64[us, UTC]")
+    if data_path.suffix == ".duckdb":
+        from velov.contracts import StationHourly
 
-    # Validation avant tout calcul de features ou entraînement
-    raw = StationHourly.validate(raw, lazy=True)
-
-    print(f"Pandera PASS : {len(raw)} lignes Gold valides")
-    print(f"Stations : {raw['station_id'].nunique()}")
-    print(f"Heures distinctes : {raw['timestamp'].nunique()}")
-
+        raw = StationHourly.validate(raw, lazy=True)
+        print(f"Pandera PASS : {len(raw)} lignes Gold valides")
+        print(f"Stations : {raw['station_id'].nunique()}")
+        print(f"Heures distinctes : {raw['timestamp'].nunique()}")
     return raw
+
+
+def evaluate(pipeline: Pipeline, frame: pd.DataFrame) -> dict:
+    """MAE sur la meme table test ; pointe 7-9h et 17-19h, heure de Lyon."""
+    y_test = frame[TARGET].to_numpy()
+    pred = np.clip(pipeline.predict(frame[FEATURES]), 0, frame["capacity"].to_numpy())
+    hours = frame["timestamp"].dt.tz_convert("Europe/Paris").dt.hour
+    peak = hours.isin([7, 8, 9, 17, 18, 19]).to_numpy()
+    return {
+        "mae_model": float(mean_absolute_error(y_test, pred)),
+        "mae_baseline_persistence": float(mean_absolute_error(y_test, frame["bikes_available"])),
+        "mae_model_peak_hours": float(mean_absolute_error(y_test[peak], pred[peak])) if peak.any() else None,
+    }
 
 
 def train(
@@ -133,6 +136,8 @@ def train(
     version: str = "0.1.0",
     test_days: int = 14,
     seed: int = 42,
+    learning_rate: float = 0.1,
+    max_iter: int = 200,
 ) -> dict:
     """Entraîne, évalue contre une baseline, écrit l'artefact. Retourne les métadonnées."""
     raw = load_training_data(data_path)
@@ -147,27 +152,13 @@ def train(
     frame = make_training_frame(raw)
     train_df, test_df = temporal_split(frame, test_days)
 
-    pipeline = build_pipeline(seed)
+    pipeline = build_pipeline(seed, learning_rate, max_iter)
     pipeline.fit(train_df[FEATURES], train_df[TARGET])
 
-    y_test = test_df[TARGET]
-    pred = np.clip(pipeline.predict(test_df[FEATURES]), 0, test_df["capacity"])
-    mae_model = float(mean_absolute_error(y_test, pred))
-    # Baseline "persistance" : dans 1 h, il y aura autant de vélos que maintenant.
-    # Le modèle doit justifier sa complexité face à cette baseline (exigence EX-05).
-    mae_baseline = float(mean_absolute_error(y_test, test_df["bikes_available"]))
-    # Heures de pointe : à confirmer selon la convention du projet
-    peak_hours = [7, 8, 9, 17, 18, 19]
+    metrics = evaluate(pipeline, test_df)
+    from velov.tracking import git_context
 
-    hours = pd.to_datetime(test_df["timestamp"]).dt.hour
-    peak_mask = hours.isin(peak_hours).to_numpy()
-
-    mae_model_peak_hours = (
-        float(mean_absolute_error(y_test[peak_mask], pred[peak_mask]))
-        if peak_mask.any()
-        else None
-    )
-    
+    provenance = git_context()
     out_dir.mkdir(parents=True, exist_ok=True)
     model_path = out_dir / MODEL_FILENAME
     joblib.dump(pipeline, model_path)
@@ -181,13 +172,7 @@ def train(
         "features": FEATURES,
         "target": TARGET,
         "metrics": {
-            "mae_model": round(mae_model, 3),
-            "mae_baseline_persistence": round(mae_baseline, 3),
-            "mae_model_peak_hours": (
-                round(mae_model_peak_hours, 3)
-                if mae_model_peak_hours is not None
-                else None
-            ),
+            **metrics,
             "test_days": test_days,
             "n_train": int(len(train_df)),
             "n_test": int(len(test_df)),
@@ -197,75 +182,26 @@ def train(
             "start": pd.to_datetime(raw["timestamp"]).min().isoformat(),
             "end": pd.to_datetime(raw["timestamp"]).max().isoformat(),
         },
-        "data_sha256": (sha256_of_frame(raw) if data_path.suffix == ".duckdb" else sha256_of(data_path)),
+        "data_sha256": sha256_of_frame(raw),
+        "data_fingerprint_method": "sha256-pandas-normalized-rows-v1",
+        "git": provenance,
         "runtime": {
             "python": platform.python_version(),
             "scikit-learn": sklearn.__version__,
             "pandas": pd.__version__,
             "numpy": np.__version__,
         },
-
-        "params": {"seed": seed},
+        "params": {"seed": seed, "learning_rate": learning_rate, "max_iter": max_iter, "test_days": test_days},
     }
     (out_dir / METADATA_FILENAME).write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
     return metadata
 
 
-def log_to_mlflow(metadata: dict, out_dir: Path) -> None:
-    """Journalise le run et le modèle dans MLflow (aperçu S1, approfondi en S4)."""
-    import mlflow  # import local : MLflow n'est pas requis pour servir le modèle
-    from mlflow.models import infer_signature
+def log_to_mlflow(metadata: dict, out_dir: Path) -> dict:
+    """Compatibilite : implementation TP4 dans velov.tracking."""
+    from velov.tracking import log_training
 
-    pipeline = joblib.load(out_dir / MODEL_FILENAME)
-    sample = make_training_frame(
-        pd.DataFrame(
-            {
-                "station_id": [1, 1],
-                "timestamp": pd.to_datetime(["2026-06-01T06:00Z", "2026-06-01T07:00Z"]),
-                "capacity": [20, 20],
-                "bikes_available": [8, 5],
-                "temperature": [21.0, 22.0],
-                "is_raining": [False, False],
-            }
-        )
-    )[FEATURES]
-
-    mlflow.set_experiment("velov-availability")
-    with mlflow.start_run(run_name=f"v{metadata['model_version']}"):
-        mlflow.log_params({"model": "HistGradientBoostingRegressor", **metadata["params"]})
-        git_commit = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
-            text=True,
-        ).strip()
-
-        git_dirty = bool(
-            subprocess.check_output(
-                ["git", "status", "--porcelain"],
-                text=True,
-            ).strip()
-        )
-
-        mlflow.set_tags({
-            "git_commit": git_commit,
-            "git_dirty": str(git_dirty).lower(),
-            "data_sha256": metadata["data_sha256"],
-            "data_start": metadata["data_period"]["start"],
-            "data_end": metadata["data_period"]["end"],
-        })
-        mlflow.log_metrics({k: v for k, v in metadata["metrics"].items() if k.startswith("mae") and v is not None})
-        mlflow.sklearn.log_model(
-            pipeline,
-            name="model",
-            signature=infer_signature(sample, pipeline.predict(sample)),
-            input_example=sample,
-            # Depuis MLflow 3.x, sklearn est sérialisé par défaut en skops (format sûr,
-            # sans exécution de code arbitraire), plus en pickle. skops refuse les types
-            # qu'il ne connaît pas : on déclare explicitement ceux qu'on a vérifiés.
-            serialization_format="skops",
-            skops_trusted_types=SKOPS_TRUSTED_TYPES,
-        )
-        mlflow.log_artifact(str(out_dir / MODEL_FILENAME), artifact_path="training_outputs")
-        mlflow.log_artifact(str(out_dir / METADATA_FILENAME), artifact_path="training_outputs")
+    return log_training(metadata, out_dir)
 
 
 def main() -> None:
@@ -277,6 +213,8 @@ def main() -> None:
     parser.add_argument("--validate-only", action="store_true", help="valider Gold sans entrainer ni ecrire de modele")
     parser.add_argument("--test-days", type=int, default=14)
     parser.add_argument("--seed", type=int, default=42, help="Graine aleatoire pour entrainer le modele")
+    parser.add_argument("--learning-rate", type=float, default=0.1)
+    parser.add_argument("--max-iter", type=int, default=200)
     args = parser.parse_args()
 
     if args.validate_only:
@@ -285,14 +223,24 @@ def main() -> None:
         load_training_data(args.data)
         return
 
-    metadata = train(args.data, args.out, version=args.version, test_days=args.test_days, seed=args.seed)
+    metadata = train(
+        args.data,
+        args.out,
+        version=args.version,
+        test_days=args.test_days,
+        seed=args.seed,
+        learning_rate=args.learning_rate,
+        max_iter=args.max_iter,
+    )
     m = metadata["metrics"]
     print(f"MAE modèle   : {m['mae_model']:.3f} vélos")
     print(f"MAE baseline : {m['mae_baseline_persistence']:.3f} vélos (persistance)")
     print(f"Artefact     : {args.out / MODEL_FILENAME} (sha256 {metadata['artifact']['sha256'][:12]}...)")
     if args.mlflow:
-        log_to_mlflow(metadata, args.out)
+        logged = log_to_mlflow(metadata, args.out)
+        print(f"Run MLflow : {logged['run_id']}")
         print("Run journalisé dans MLflow (voir `mlflow ui`)")
+
 
 if __name__ == "__main__":
     main()
