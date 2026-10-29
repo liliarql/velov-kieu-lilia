@@ -81,7 +81,10 @@ def ready() -> dict:
     """Readiness : 200 si le modèle est chargé, 503 sinon (TODO 6)."""
     if STATE["model"] is None:
         raise HTTPException(status_code=503, detail="Modèle non chargé")
-    return {"status": "ready", "model_version": STATE["metadata"]["model_version"]}
+    # registry_version : version du registre MLflow livrée (S4), None pour un modèle copié au build
+    metadata = STATE["metadata"]
+    registry_version = metadata.get("registry", {}).get("version")
+    return {"status": "ready", "model_version": metadata["model_version"], "registry_version": registry_version}
 
 
 @app.post("/v1/predict", response_model=PredictionResponse)

@@ -146,6 +146,79 @@ docker compose down
 
 Le modele et `metadata.json` doivent exister avant le build de l'image. Ne pas versionner `.env`. Le Dockerfile utilise Python 3.12 par defaut ; pour servir un artefact entraine avec l'environnement de reference, construire avec `docker compose build --build-arg PYTHON_IMAGE=python:3.14-slim`. Docker n'a pas ete revalide dans cette correction locale.
 
+## TP4 : tracer, promouvoir, intégrer (S4)
+
+**Serveur MLflow** (stack fournie, `compose.mlflow.yaml`) : il réutilise le PostgreSQL de `compose.yaml` avec une base
+dédiée `mlflow`, et garde les modèles dans le volume `mlartifacts`. Rien de nouveau dans `.env` (`POSTGRES_PASSWORD`).
+
+```bash
+docker compose -f compose.yaml -f compose.mlflow.yaml up -d --build
+docker compose -f compose.yaml -f compose.mlflow.yaml ps   # db et mlflow : healthy
+# Interface : http://<IP de la VM>:5000
+```
+
+Vérifié : après `docker compose ... restart`, les versions du registre et leurs artefacts sont toujours là.
+Attention : `docker compose down -v` supprime aussi le registre.
+
+L'URL du serveur vient de l'environnement. Sans VM : `export MLFLOW_TRACKING_URI=sqlite:///mlflow.db`.
+
+```bash
+export MLFLOW_TRACKING_URI=http://<IP de la VM>:5000
+python -m velov.data                       # historique simulé : 90 jours, 20 stations
+python -m velov.train --mlflow --seed 42   # run tracé, nouvelle version du registre en alias challenger
+python -m velov.promote --dry-run          # décision de la règle, registre inchangé
+python -m velov.promote                    # alias champion si les trois conditions passent
+```
+
+Chaque run porte ses paramètres (`seed`, `learning_rate`, `max_iter`, `test_days`), ses métriques de test
+(`mae_model`, `mae_baseline_persistence`, `mae_model_peak_hours`), le commit et `git_dirty`, l'empreinte et la
+période des données, le modèle MLflow avec sa signature, et le paquet servi (`package/model.joblib` + `metadata.json`).
+
+**Écart entre seeds** (simulateur 90 j × 20 stations, mêmes données) :
+
+| Seed | `mae_model` | `mae_model_peak_hours` |
+|---|---|---|
+| 42 (deux runs) | 1,339 / 1,339 | 1,478 / 1,478 |
+| 7 | 1,345 | 1,505 |
+| 1, 2, 3 | 1,341 ; 1,340 ; 1,345 | 1,454 ; 1,465 ; 1,475 |
+
+Même seed, mêmes métriques : l'entraînement est reproductible. Entre seeds, la MAE varie de 0,006 et celle des
+heures de pointe de 0,05 : c'est le bruit, pas une amélioration.
+
+**Règle de promotion** (`src/velov/promote.py`, testée dans `tests/test_promote.py`) : le challenger devient champion si
+1. il bat la baseline de persistance (EX-05) ;
+2. il améliore la MAE du champion d'au moins **0,01** (au-dessus du bruit de seed de 0,006) ;
+3. il ne dégrade pas la MAE des heures de pointe de plus de **0,05**.
+
+Limite connue : la comparaison porte sur les métriques enregistrées. Si les données changent, champion et challenger
+n'ont pas été évalués sur la même fenêtre de test ; réévaluer le champion sur la fenêtre du challenger serait plus juste.
+
+**Livrer le champion et revenir en arrière** (`compose.champion.yaml`, `src/velov/deliver.py`) : l'API lit son modèle
+dans un volume `models`. Depuis un clone propre (VM), `models/` est vide : `/ready` répond 503 jusqu'à la première
+livraison. Le service `deliver` y copie le paquet du champion (empreinte SHA-256 vérifiée), sans
+reconstruire l'image ; `/ready` indique la version du registre servie.
+
+```bash
+C="-f compose.yaml -f compose.mlflow.yaml -f compose.champion.yaml"
+docker compose $C run --rm deliver                  # paquet du champion -> volume models
+docker compose $C up -d --force-recreate api        # l'API charge le modèle au démarrage
+curl http://localhost:8002/ready                    # {"registry_version": "2", ...}
+
+python -m velov.promote --rollback                  # l'ancien champion reprend l'alias champion
+docker compose $C run --rm deliver && docker compose $C up -d --force-recreate api
+curl http://localhost:8002/ready                    # {"registry_version": "1", ...}
+```
+
+À chaque promotion, l'ancien champion garde l'alias `previous-champion` : c'est lui que `--rollback` restaure.
+Cycle vérifié en local (entraînement, promotion v1 puis v2, livraison v2, retour arrière, livraison v1) et testé
+dans `tests/test_tracking.py::test_deliver_then_rollback`.
+
+**CI** (`.github/workflows/ci.yml`, à chaque push) : `ruff check`, `pytest` (dont `tests/test_model.py` : un modèle qui
+ne bat pas la baseline fait échouer la CI), `gitleaks` sur tout l'historique. Actions épinglées par SHA de commit.
+
+Sous Windows, lancer les tests en UTF-8 (`$env:PYTHONUTF8=1` dans PowerShell) : sinon trois tests de
+`tests/test_pipeline.py` échouent en lisant la sortie de dbt (cp1252). La CI tourne sous Linux, en UTF-8.
+
 ## Rendu TP3
 
 Branche de rendu : `tp3-minh-dung` sur le fork `liliarql/velov-kieu-lilia`. Le tag annote `tp3` doit designer le commit final de cette branche. Verification des references :

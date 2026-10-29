@@ -34,3 +34,5 @@ __pycache__/
 *.pyc
 .venv/
 .env
+# Clés SSH de la VM : jamais dans git
+ssh/

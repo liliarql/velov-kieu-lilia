@@ -1,0 +1,36 @@
+# Livraison du champion du registre MLflow à l'API (S4, niveau Should).
+# Complète compose.yaml et compose.mlflow.yaml : on lance toujours les trois ensemble.
+#
+#   C="-f compose.yaml -f compose.mlflow.yaml -f compose.champion.yaml"
+#   docker compose $C run --rm deliver                    # copie le champion dans le volume models
+#   docker compose $C up -d --force-recreate api          # l'API recharge le modèle au démarrage
+#   curl localhost:8002/ready                             # registry_version = version livrée
+#
+# Retour arrière : python -m velov.promote --rollback (registre), puis les deux mêmes commandes.
+
+services:
+  api:
+    volumes:
+      # Volume nommé : vide au premier lancement, Docker le remplit avec le modèle de l'image
+      # (entraîné au build). La livraison le remplace ensuite, sans reconstruire l'image.
+      - models:/app/models:ro
+
+  deliver:
+    image: velov-mlflow:3.16.1  # image du serveur MLflow : contient MLflow, rien du projet à installer
+    profiles: ["tools"]
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      PYTHONPATH: /src
+    volumes:
+      - ./src:/src:ro
+      - models:/models
+    # Le volume appartient à root (fichiers copiés depuis l'image de l'API) : ce conteneur ponctuel
+    # écrit en root ; l'API, elle, le monte en lecture seule et tourne en non-root.
+    user: root
+    command: ["python", "-m", "velov.deliver", "--out", "/models"]
+    depends_on:
+      mlflow:
+        condition: service_healthy
+
+volumes:
+  models:
