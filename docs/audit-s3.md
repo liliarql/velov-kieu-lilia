@@ -36,4 +36,4 @@ Les fixtures de 48 h sont retrouvees dans [le depot enseignant](https://github.c
 
 Outil : OpenAI Codex. Demande : verifier l'audit contre le depot, lire le TP3, corriger les erreurs confirmees et documenter les exigences manquantes, hors VM indisponible.
 
-Contributions : corrections Python/SQL, hook de publication, tests de regression et integration, demo synthetique 48 h, README, runbook, ADR, explication des modeles et suivi des exigences. Verifications executees : `validation-tp3.md`. La revue de la jointure et ce support ont ete rediges avec l'aide de Codex. Les donnees simulees sont identifiees comme telles ; la VM est exclue.
+Contributions : corrections Python/SQL, hook de publication, tests de regression et integration, demo synthetique 48 h, README, runbook, ADR, explication des modeles et suivi des exigences. Verifications executees depuis un clone Git propre : `validation-tp3.md` et `validation-tp3-results.txt` (39 tests, dbt/Pandera, training H+1). La revue de la jointure et ce support ont ete rediges avec l'aide de Codex. Les donnees simulees sont identifiees comme telles ; la VM est exclue.

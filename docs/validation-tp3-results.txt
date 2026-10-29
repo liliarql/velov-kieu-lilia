@@ -1,0 +1,28 @@
+TP3 clean-clone validation - 2026-10-29
+Code commit: e3b5e120fe3c35400f4b1119d008437cd428bf32
+Environment: Ubuntu/WSL, Python 3.14.4
+Fresh venv + requirements-dev.txt + editable install: exit 0
+Command: bash scripts/verify_tp3.sh
+Exit code: 0
+Git working tree after verification: clean
+
+No broken requirements found.
+All checks passed!
+39 passed in 123.85s (0:02:03)
+11:21:50  Done. PASS=20 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=20
+Pandera PASS : 36 lignes Gold valides
+Stations : 36
+Heures distinctes : 1
+11:21:57  Done. PASS=20 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=20
+Pandera PASS : 960 lignes Gold valides
+Stations : 20
+Heures distinctes : 48
+Pandera PASS : 960 lignes Gold valides
+Stations : 20
+Heures distinctes : 48
+MAE modèle   : 1.989 vélos
+MAE baseline : 1.971 vélos (persistance)
+
+Synthetic 48h: 960 Gold rows, 940 H+1 examples, 460 train / 480 test.
+Availability dates in the synthetic data are simulation assumptions.
+VM excluded; Docker not revalidated.

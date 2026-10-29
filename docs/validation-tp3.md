@@ -2,11 +2,13 @@
 
 ## Perimetre et environnement
 
-Verification du depot courant contre le TP3 fourni et l'audit utilisateur. VM exclue a la demande (indisponible). Aucune collecte reseau reelle ni publication distante n'a ete executee. Les tests pipeline travaillent sur des copies temporaires ; la base et les archives locales existantes n'ont pas ete remplacees.
+Verification du depot contre le TP3 fourni et l'audit utilisateur. VM exclue a la demande (indisponible). Les tests ne collectent pas de donnees reelles sur le reseau. Les archives et la base existantes restent distinctes de la demo generee dans `data/demo48h/`.
 
 Environnement teste : Ubuntu/WSL, Python 3.14.4 ; dbt-core 1.12.6, dbt-duckdb 1.11.0, DuckDB 2.0.0, Pandera 0.35.0, requests 2.34.2. Les versions directes sont declarees dans les requirements. Python 3.12/Docker n'ont pas ete revalides ici.
 
-Une copie propre des fichiers sources courants (fichiers Git et nouveaux fichiers non ignores), sans le venv ni les bases locales, a ete preparee dans un repertoire temporaire. Un nouveau venv a ete cree avec Python 3.14 ; `pip install -r requirements-dev.txt`, `pip install -e .` puis `bash scripts/verify_tp3.sh` ont reussi. Il s'agit d'un export de l'etat de travail actuel, pas d'un clone d'un commit distant deja pousse : les corrections ne sont pas encore commitees. Le clone Git final doit etre refait apres commit/tag.
+**Validation depuis un vrai clone Git independant du commit `e3b5e120fe3c35400f4b1119d008437cd428bf32`** : `git clone --no-hardlinks --branch tp3-minh-dung`, nouveau venv Python 3.14, `pip install -r requirements-dev.txt`, `pip install -e .`, puis `bash scripts/verify_tp3.sh`. Toutes les commandes ont retourne 0, avec un arbre Git propre apres execution. Le commit de cloture de ce rapport ne change que la documentation, pas le code teste.
+
+Les sorties de synthese capturees sont conservees dans [validation-tp3-results.txt](validation-tp3-results.txt).
 
 ## Resultats reels
 
@@ -15,10 +17,13 @@ Une copie propre des fichiers sources courants (fichiers Git et nouveaux fichier
 | Installation dans le nouveau venv | Succes |
 | `python -m pip check` | No broken requirements found |
 | `python -m ruff check src tests` | All checks passed |
-| Suite pytest complete | **38 tests reussis**, aucun echec |
+| Suite pytest complete | **39 tests reussis**, aucun echec |
 | Build dbt demo avec cutoff fixe et Bronze isole | **PASS=20 WARN=0 ERROR=0 SKIP=0 TOTAL=20** |
 | Detail dbt | 5 modeles (4 vues Silver, 1 candidat Gold), 14 tests, 1 hook de publication |
 | `python -m velov.train --data <base-demo> --validate-only` | **Pandera PASS : 36 lignes, 36 stations, 1 heure** |
+| Demo synthetique 48 h | dbt PASS=20, Pandera 960 lignes / 20 stations / 48 heures |
+| Training H+1 sur simulation | 940 exemples : 460 train, 480 test (`--test-days 1`) ; artefacts crees |
+| MAE demo (velos) | Modele **1,989**, persistance **1,971** : le modele ne bat pas cette baseline |
 | `git diff --check` | Succes |
 
 ## Preuves de comportement (tests executables)
@@ -27,7 +32,7 @@ Une copie propre des fichiers sources courants (fichiers Git et nouveaux fichier
 
 `tests/test_features.py` : cible uniquement a exactement H+1 par station, trou horaire refuse, retour d'heure Paris traite en heures UTC ecoulees. Les tests precedents de features sont conserves.
 
-`tests/test_pipeline.py` (19 cas, vrais sous-processus dbt) :
+`tests/test_pipeline.py` (20 cas, vrais sous-processus dbt) :
 
 - EX-10 : deux builds du meme Bronze au meme `as_of`, hash du contenu Gold trie identique.
 - EX-11 : nouvelles versions de capacity, corrections tardives de status et meteo collectee plus tard ; Gold de l'heure passee identique.
@@ -53,15 +58,23 @@ Une copie propre des fichiers sources courants (fichiers Git et nouveaux fichier
 | IA declaree et exercice jointure | Enonce original, revue IA par lignes et support d'explication des modeles fournis |
 | Stretch Prefect/freshness/Redpanda | Non implemente, facultatif pour valider le Must |
 | VM | Exclue de cette correction, non verifiee |
-| Tag tp3 et clone final | Etape de rendu apres commit ; voir ci-dessous |
+| Clone propre | Installation neuve, 39 tests et deux scenarios dbt/Pandera reussis ; commit code reference ci-dessus |
+| Rendu Git | Branche `tp3-minh-dung`, tag annote `tp3` sur le commit final ; commandes de verification dans le README |
 
-## Limites et cloture du rendu
+## Demo 48 h et limites
 
-- Demo reelle : une seule heure ; impossible d'entrainer H+1 sur ce jeu. Collecter davantage d'historique reel ; ne pas presenter le simulateur comme une collecte reelle.
-- Le jeu pedagogique enseignant de 48 h a ete retrouve sur son depot public (voir audit-s3.md). Il utilise un format meteo different sans date de collecte et une anomalie volontaire ; ne pas l'injecter tel quel en pretendant prouver la disponibilite historique. Meme 48 h ne permettent pas un test de 14 jours.
-- Aucun commit, push ou changement de tag effectue. Le tag annote local `tp3` avait pour objet `6a727e8` et pointait le commit `1095f51`, identique au HEAD initial. Il doit pointer le futur commit final apres revue, puis etre pousse avec la branche. Le fichier genere `velov_dbt/.user.yml` a ete retire de l'index et conserve localement, et son exclusion ajoutee a `.gitignore`.
-- Apres commit, verifier un vrai clone : `git clone --local <chemin-du-depot> <nouveau-dossier>`, activer un venv neuf et suivre le README puis `bash scripts/verify_tp3.sh`. L'export propre teste ici valide les sources courantes et les dependances, sans attester un futur push.
+`python -m velov.demo` genere un Bronze synthetique deterministe dans un dossier distinct. Les hypotheses de disponibilite sont explicites dans le manifeste. La generation rejouee garde le meme contenu. Le scenario passe la chaine complete dbt -> Gold public -> Pandera -> train H+1 dans le clone propre et dans le dossier de travail.
 
-## Complement : demo 48 h
+Artefacts disponibles localement (regenerables, ignores par Git) :
 
-`python -m velov.demo` genere un Bronze synthetique dans un dossier distinct. Le test d'integration ajoute a reussi : 960 lignes, 48 heures, 940 cibles H+1 et creation des artefacts avec un test temporel d'un jour. La prochaine verification depuis le clone Git inclut ce scenario dans `scripts/verify_tp3.sh`.
+- `data/demo48h/manifest.json` : provenance synthetique, graine, heures et cutoff.
+- `data/demo48h/demo.duckdb` : 960 lignes Gold sur 48 heures.
+- `data/demo48h/models/model.joblib` et `metadata.json` : modele et resultats.
+
+Le modele de cette petite simulation ne bat pas la baseline de persistance. L'execution reussie prouve le fonctionnement de l'entrainement, pas sa qualite pour la production. L'historique reel archive reste limite a une heure ; davantage de collecte reelle sera necessaire. Un test de 14 jours ne peut pas etre realise sur 48 h.
+
+Le jeu pedagogique enseignant original de 48 h, de format meteo different et contenant une anomalie volontaire, est source dans `audit-s3.md`. Notre simulation est distincte et ne pretend pas etre une collecte reelle ni la copie de ces fixtures.
+
+Le fichier genere `velov_dbt/.user.yml` est retire du versionnement et ignore, conserve localement. Avant correction, le tag annote `tp3` avait pour objet `6a727e8` et pointait le commit `1095f51` (le HEAD initial) ; l'objet du tag ne doit pas etre confondu avec le commit.
+
+Pour verifier le rendu publie, comparer la branche et le tag dereference : `git ls-remote origin refs/heads/tp3-minh-dung 'refs/tags/tp3^{}'`. Ils doivent donner le meme commit final. Les commandes de clone distant et de verification sont dans le README.
