@@ -11,7 +11,7 @@ Usage :
 """
 
 from __future__ import annotations
-
+import subprocess
 import argparse
 import hashlib
 import json
@@ -156,7 +156,18 @@ def train(
     # Baseline "persistance" : dans 1 h, il y aura autant de vélos que maintenant.
     # Le modèle doit justifier sa complexité face à cette baseline (exigence EX-05).
     mae_baseline = float(mean_absolute_error(y_test, test_df["bikes_available"]))
+    # Heures de pointe : à confirmer selon la convention du projet
+    peak_hours = [7, 8, 9, 17, 18, 19]
 
+    hours = pd.to_datetime(test_df["timestamp"]).dt.hour
+    peak_mask = hours.isin(peak_hours).to_numpy()
+
+    mae_model_peak_hours = (
+        float(mean_absolute_error(y_test[peak_mask], pred[peak_mask]))
+        if peak_mask.any()
+        else None
+    )
+    
     out_dir.mkdir(parents=True, exist_ok=True)
     model_path = out_dir / MODEL_FILENAME
     joblib.dump(pipeline, model_path)
@@ -172,11 +183,20 @@ def train(
         "metrics": {
             "mae_model": round(mae_model, 3),
             "mae_baseline_persistence": round(mae_baseline, 3),
+            "mae_model_peak_hours": (
+                round(mae_model_peak_hours, 3)
+                if mae_model_peak_hours is not None
+                else None
+            ),
             "test_days": test_days,
             "n_train": int(len(train_df)),
             "n_test": int(len(test_df)),
         },
         "artifact": {"file": MODEL_FILENAME, "sha256": sha256_of(model_path)},
+        "data_period": {
+            "start": pd.to_datetime(raw["timestamp"]).min().isoformat(),
+            "end": pd.to_datetime(raw["timestamp"]).max().isoformat(),
+        },
         "data_sha256": (sha256_of_frame(raw) if data_path.suffix == ".duckdb" else sha256_of(data_path)),
         "runtime": {
             "python": platform.python_version(),
@@ -184,6 +204,8 @@ def train(
             "pandas": pd.__version__,
             "numpy": np.__version__,
         },
+
+        "params": {"seed": seed},
     }
     (out_dir / METADATA_FILENAME).write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
     return metadata
@@ -210,8 +232,27 @@ def log_to_mlflow(metadata: dict, out_dir: Path) -> None:
 
     mlflow.set_experiment("velov-availability")
     with mlflow.start_run(run_name=f"v{metadata['model_version']}"):
-        mlflow.log_params({"model": "HistGradientBoostingRegressor", "test_days": metadata["metrics"]["test_days"]})
-        mlflow.log_metrics({k: v for k, v in metadata["metrics"].items() if k.startswith("mae")})
+        mlflow.log_params({"model": "HistGradientBoostingRegressor", **metadata["params"]})
+        git_commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            text=True,
+        ).strip()
+
+        git_dirty = bool(
+            subprocess.check_output(
+                ["git", "status", "--porcelain"],
+                text=True,
+            ).strip()
+        )
+
+        mlflow.set_tags({
+            "git_commit": git_commit,
+            "git_dirty": str(git_dirty).lower(),
+            "data_sha256": metadata["data_sha256"],
+            "data_start": metadata["data_period"]["start"],
+            "data_end": metadata["data_period"]["end"],
+        })
+        mlflow.log_metrics({k: v for k, v in metadata["metrics"].items() if k.startswith("mae") and v is not None})
         mlflow.sklearn.log_model(
             pipeline,
             name="model",
@@ -223,6 +264,8 @@ def log_to_mlflow(metadata: dict, out_dir: Path) -> None:
             serialization_format="skops",
             skops_trusted_types=SKOPS_TRUSTED_TYPES,
         )
+        mlflow.log_artifact(str(out_dir / MODEL_FILENAME), artifact_path="training_outputs")
+        mlflow.log_artifact(str(out_dir / METADATA_FILENAME), artifact_path="training_outputs")
 
 
 def main() -> None:
@@ -233,6 +276,7 @@ def main() -> None:
     parser.add_argument("--mlflow", action="store_true", help="journaliser aussi dans MLflow")
     parser.add_argument("--validate-only", action="store_true", help="valider Gold sans entrainer ni ecrire de modele")
     parser.add_argument("--test-days", type=int, default=14)
+    parser.add_argument("--seed", type=int, default=42, help="Graine aleatoire pour entrainer le modele")
     args = parser.parse_args()
 
     if args.validate_only:
@@ -241,7 +285,7 @@ def main() -> None:
         load_training_data(args.data)
         return
 
-    metadata = train(args.data, args.out, version=args.version, test_days=args.test_days)
+    metadata = train(args.data, args.out, version=args.version, test_days=args.test_days, seed=args.seed)
     m = metadata["metrics"]
     print(f"MAE modèle   : {m['mae_model']:.3f} vélos")
     print(f"MAE baseline : {m['mae_baseline_persistence']:.3f} vélos (persistance)")
@@ -249,7 +293,6 @@ def main() -> None:
     if args.mlflow:
         log_to_mlflow(metadata, args.out)
         print("Run journalisé dans MLflow (voir `mlflow ui`)")
-
 
 if __name__ == "__main__":
     main()
