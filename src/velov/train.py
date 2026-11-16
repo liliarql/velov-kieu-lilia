@@ -192,6 +192,7 @@ def train(
             "numpy": np.__version__,
         },
         "params": {"seed": seed, "learning_rate": learning_rate, "max_iter": max_iter, "test_days": test_days},
+        "data_path": str(data_path),
     }
     (out_dir / METADATA_FILENAME).write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
     return metadata

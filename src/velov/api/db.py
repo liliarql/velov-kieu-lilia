@@ -1,4 +1,3 @@
-
 import logging
 import os
 
@@ -35,10 +34,7 @@ def init_db():
     logger.info("Table prediction ok")
 
 
-def save_prediction(
-    request: PredictionRequest,
-    response: PredictionResponse
-):
+def save_prediction(request: PredictionRequest, response: PredictionResponse):
     """save prediction in PostgreSQL."""
     database_url = os.getenv("DATABASE_URL")
 
@@ -67,10 +63,7 @@ def save_prediction(
                 request.bikes_available,
                 response.predicted_bikes,
                 response.model_version,
-            )
+            ),
         )
 
-    logger.info(
-        "Prediction enregistrée pour station_id=%s",
-        request.station_id
-    )
+    logger.info("Prediction enregistrée pour station_id=%s", request.station_id)
