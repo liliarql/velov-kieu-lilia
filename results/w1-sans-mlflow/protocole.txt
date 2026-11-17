@@ -1,0 +1,7 @@
+date_utc=2026-11-17T11:36:08Z
+host=http://localhost:8000
+paliers=10 25 50 100 150 duree=2m warmup=1m
+commit=84fcfa6
+poste_coeurs=8
+locust=locust 2.47.0 from /home/kieu_minh_dung/velov-mlops-student/.venv/lib/python3.14/site-packages/locust (Python 3.14.4)
+model={"status":"ready","model_version":"0.1.0"}
