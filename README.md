@@ -137,6 +137,21 @@ exercices/         démo pickle (S1), audit, debug et conformité Docker (S2), a
 - **Paliers** : échauffement 1 min (non compté), puis 10 / 25 / 50 / 100 / 150 usagers, 2 min par palier
 - **Date** : 2026-11-17
 
+### Relancer la mesure (local ou VM)
+
+Depuis le poste, dans Git Bash, avec l'environnement virtuel activé (Locust tourne toujours sur le poste) :
+
+```bash
+./loadtest/lancer.sh local w1                            # API Docker sur le poste, 1 cœur
+API_WORKERS=2 API_CPUS=2 ./loadtest/lancer.sh local w2   # 2 workers, 2 cœurs
+./loadtest/lancer.sh vm w1                               # API sur la VM -> results/vm-w1
+python scripts/plot_saturation.py results/w1 results/w2  # courbe
+```
+
+La limite de cœurs est écrite dans `compose.loadtest.yaml` (`deploy.resources.limits.cpus`) au lieu du `docker update` manuel.
+La cible `vm` envoie le commit courant sur la VM (remote `vm`, branche `loadtest`), y relance l'API, puis lance les mêmes paliers.
+Si la VM est injoignable, le script s'arrête : pas de repli silencieux sur le local, chaque protocole indique `cible=local` ou `cible=vm`.
+
 ### Courbe de saturation — 1 worker, 1 cœur (w1)
 
 | usagers | requêtes | erreurs % | débit req/s | p50 ms | p95 ms | p99 ms | SLO p95 |

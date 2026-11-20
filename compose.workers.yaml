@@ -1,7 +1,8 @@
-# Override : 2 workers uvicorn pour le test de charge (TP5, étape 4).
-# Usage : docker compose -f compose.yaml -f compose.workers.yaml up -d api
+# Override : plusieurs workers uvicorn pour le test de charge (TP5, étape 4).
+# Usage : API_WORKERS=2 docker compose -f compose.yaml -f compose.workers.yaml up -d api
+# (à combiner avec compose.loadtest.yaml pour fixer le nombre de cœurs, voir loadtest/lancer.sh)
 services:
   api:
     command: ["uvicorn", "velov.api.main:app",
               "--host", "0.0.0.0", "--port", "8000",
-              "--workers", "2"]
+              "--workers", "${API_WORKERS:-2}"]

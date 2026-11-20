@@ -1,0 +1,17 @@
+# Override : API limitée en CPU pour le test de charge (TP5, EX-16).
+# Remplace le `docker update --cpus 1` manuel : la limite est écrite, donc rejouable,
+# en local comme sur la VM.
+#
+#   docker compose -f compose.yaml -f compose.loadtest.yaml up -d --build api
+#   API_CPUS=2 docker compose -f compose.yaml -f compose.loadtest.yaml -f compose.workers.yaml up -d api
+#
+# En local, Locust tourne sur les cœurs laissés libres : la mesure reste moins fiable
+# qu'avec Locust sur une autre machine (règle du protocole), à indiquer avec les chiffres.
+# deploy.resources plutôt que `cpus:` : Docker Compose 2.7 ignore la clé `cpus` du service
+# (vérifié avec docker inspect : NanoCpus=0), mais applique bien deploy.resources.limits.
+services:
+  api:
+    deploy:
+      resources:
+        limits:
+          cpus: "${API_CPUS:-1}"
