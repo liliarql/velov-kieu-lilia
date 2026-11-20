@@ -17,6 +17,9 @@ mlruns/
 # Secrets
 .env
 
+# Fichiers temporaires
+payload.json
+
 # dbt (S3)
 velov_dbt/target/
 velov_dbt/logs/

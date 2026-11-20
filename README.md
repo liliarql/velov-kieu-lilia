@@ -125,6 +125,71 @@ data/fixtures/     bronze de démonstration, régénérable avec scripts/make_fi
 exercices/         démo pickle (S1), audit, debug et conformité Docker (S2), audit SQL (S3)
 ```
 
+## Performance (TP5, EX-16)
+
+### Protocole
+
+- **Mesure locale** : API et Locust sur le même poste (VM indisponible)
+- **Poste** : Windows 11, 8 cœurs, Python 3.11.9
+- **API** : conteneur Docker, limitée à 1 cœur (`docker update --cpus 1`)
+- **Locust** : 2.47.0, sur les cœurs restants
+- **Commit** : `84fcfa6` (s4-end), modèle v0.1.0
+- **Paliers** : échauffement 1 min (non compté), puis 10 / 25 / 50 / 100 / 150 usagers, 2 min par palier
+- **Date** : 2026-11-17
+
+### Courbe de saturation — 1 worker, 1 cœur (w1)
+
+| usagers | requêtes | erreurs % | débit req/s | p50 ms | p95 ms | p99 ms | SLO p95 |
+|---|---|---|---|---|---|---|---|
+| 10 | 998 | 0.0 | 8.4 | 64 | 96 | 220 | ok |
+| 25 | 2463 | 0.0 | 20.8 | 66 | 200 | 560 | ok |
+| 50 | 3399 | 0.0 | 28.6 | 580 | 1300 | 1600 | KO |
+| 100 | 3422 | 0.0 | 29.2 | 2100 | 2900 | 4000 | KO |
+| 150 | 3820 | 0.0 | 32.2 | 3200 | 4100 | 5400 | KO |
+
+**Capacité sous le SLO** (p95 ≤ 200 ms) : environ **21 req/s** (25 usagers). Le débit plafonne à ~30 req/s au-delà.
+
+### Courbe de saturation — 2 workers, 2 cœurs (w2)
+
+| usagers | requêtes | erreurs % | débit req/s | p50 ms | p95 ms | p99 ms | SLO p95 |
+|---|---|---|---|---|---|---|---|
+| 10 | 980 | 0.0 | 8.2 | 79 | 190 | 550 | ok |
+| 25 | 2211 | 0.0 | 18.7 | 130 | 690 | 1200 | KO |
+| 50 | 2587 | 0.0 | 21.7 | 1200 | 1800 | 2100 | KO |
+| 100 | 2289 | 0.0 | 19.2 | 3900 | 5000 | 5600 | KO |
+| 150 | 1271 | 0.0 | 17.8 | 6600 | 8400 | 8900 | KO |
+
+**Capacité sous le SLO** : environ **8 req/s** (10 usagers seulement).
+
+### Courbe de saturation
+
+![Courbe de saturation](results/saturation.png)
+
+### Comparaison et conclusion
+
+Ajouter un 2e worker **dégrade** les performances au lieu de les doubler :
+- Le débit maximal passe de 32 à 18 req/s (−44 %)
+- La capacité sous le SLO passe de 21 à 8 req/s (−62 %)
+
+**Cause probable** : chaque worker fork un process qui charge son propre modèle et ouvre sa propre connexion PostgreSQL. La journalisation synchrone en base (table `predictions`) crée une contention sur le verrou de la base, et l'overhead du multi-process (fork, GIL par process, mémoire doublée) l'emporte sur le gain de parallélisme pour ce niveau de charge.
+
+### Goulot d'étranglement
+
+Temps mesuré par étape dans `_predict()` (500 itérations, batch=1, échauffement exclu) :
+
+| Étape | p50 (ms) | p95 (ms) |
+|---|---|---|
+| model_dump (Pydantic) | 0.9 | 1.3 |
+| add_features (pandas) | 5.9 | 7.8 |
+| predict (sklearn) | 9.7 | 13.1 |
+| response (construction) | 0.1 | 0.1 |
+| **TOTAL** | **16.6** | **22.3** |
+
+Le **goulot** est `model.predict` (58 % du temps au p50), suivi de `add_features` (36 %).
+`X-Process-Time-Ms` pour une requête isolée : ~14 ms. Le p50 Locust à 10 usagers (64 ms) inclut le serveur HTTP et la sérialisation JSON.
+
+Prédire 1 ligne coûte presque autant que 100 (~17 ms vs ~18 ms) : le coût fixe du pipeline domine.
+
 ## Usage de l'IA générative
 
 Chaque activité indique son mode : **sans IA**, **IA déclarée** ou **IA imposée**.

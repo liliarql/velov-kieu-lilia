@@ -1,0 +1,7 @@
+date_utc=2026-11-17T11:42:17Z
+host=http://localhost:8000
+paliers=10 25 50 100 150 duree=2m warmup=1m
+commit=84fcfa6
+poste_coeurs=8
+locust=locust 2.47.0 from D:\University\YNOV\2026-2027\DevLQ\AI_dans_cloud\velov-kieu-lilia\.venv\Lib\site-packages\locust (Python 3.11.9)
+model={"status":"ready","model_version":"0.1.0"}
