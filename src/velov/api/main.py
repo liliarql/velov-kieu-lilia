@@ -28,10 +28,14 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
 
+
 import joblib
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
+
+from prometheus_fastapi_instrumentator import Instrumentator
+from prometheus_client import Gauge
 
 from velov.api import storage
 from velov.api.schemas import (
@@ -49,6 +53,11 @@ logger = logging.getLogger("velov.api")
 # État du service, rempli au démarrage.
 STATE: dict = {"model": None, "metadata": None, "engine": None}
 
+MODEL_INFO = Gauge(
+    "velov_model_info",
+    "Version du modele servi",
+    ["model_version"],
+)
 
 def load_model(model_dir: Path) -> tuple[object, dict]:
     """Charge le modèle APRÈS avoir vérifié son empreinte.
@@ -72,6 +81,7 @@ async def lifespan(app: FastAPI):
     model_dir = Path(os.getenv("MODEL_DIR", "models"))
     try:
         STATE["model"], STATE["metadata"] = load_model(model_dir)
+        MODEL_INFO.labels(model_version=STATE["metadata"]["model_version"]).set(1)
         logger.info("Modèle %s chargé depuis %s", STATE["metadata"]["model_version"], model_dir)
     except Exception:
         # Le process démarre quand même : /health répond, /ready signale le problème.
@@ -95,6 +105,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+Instrumentator(
+    excluded_handlers=["/metrics"],
+    should_instrument_requests_inprogress=True,
+).instrument(
+    app,
+    latency_lowr_buckets=(
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.2,
+        0.5,
+        1,
+    ),
+).expose(
+    app,
+    include_in_schema=False,
+)
 
 @app.middleware("http")
 async def add_process_time(request: Request, call_next):
