@@ -25,3 +25,6 @@ velov_dbt/dbt_packages/
 # Exploitation (S6) : la clé TLS ne quitte jamais la VM ; les rapports Evidently se régénèrent
 certs/
 reports/
+
+# Empreintes des mots de passe (htpasswd) : générées sur chaque machine, jamais versionnées
+secrets/

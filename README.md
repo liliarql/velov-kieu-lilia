@@ -126,24 +126,62 @@ Choix du moteur d'inférence et son triplet mesuré : `docs/adr/0003-moteur-infe
 
 ## Exploitation et monitoring (S6)
 
-Fournis pour le TP6 : `compose.monitoring.yaml` (proxy Nginx en HTTPS, Prometheus, Grafana),
-`docker/nginx/`, `docker/prometheus/`, `docker/grafana/provisioning/`, `scripts/make_cert.sh`,
-`src/velov/replay.py` et `requirements-monitoring.txt`. À écrire : l'instrumentation de l'API,
-les règles d'alerte, le tableau de bord et `src/velov/monitor.py`.
+Un seul point d'entrée, en HTTPS (EX-19) ; le SLO suivi en continu, avec des alertes (EX-20) ; la dérive et
+l'erreur réelle du modèle mesurées sur les prédictions journalisées (EX-21).
 
 ```bash
-# sur la VM : certificat pour son adresse, puis la stack complète
+# sur la VM : certificat pour son adresse, identifiant de Prometheus, puis la stack complète
 ./scripts/make_cert.sh 192.168.1.2xx
-# dans .env : GRAFANA_ADMIN_PASSWORD=... et COMPOSE_FILE=compose.yaml:compose.mlflow.yaml:compose.monitoring.yaml
+# dans .env (voir .env.example) : COMPOSE_FILE, PUBLIC_HOST, GRAFANA_ADMIN_PASSWORD,
+# PROMETHEUS_WEB_PASSWORD, MONITOR_DB_PASSWORD
+./scripts/make_htpasswd.sh
 docker compose up -d
+./scripts/make_ro_role.sh            # rôle PostgreSQL en lecture seule pour velov.monitor
 
-# depuis le poste : l'API n'est joignable qu'en HTTPS, avec le certificat de la VM
+# depuis le poste : récupérer le certificat (jamais la clé), puis HTTPS seulement
+scp <user>@192.168.1.2xx:~/velov-mlops/certs/velov.crt certs/
 curl -s --cacert certs/velov.crt https://192.168.1.2xx/ready
+#   Grafana    : https://192.168.1.2xx/grafana/     (admin)
+#   Prometheus : https://192.168.1.2xx/prometheus/  (authentification basique)
 
-# rejouer une semaine d'observations contre l'API (scénarios : normal, froid, demenagement)
+# rejouer une semaine (normal, froid, demenagement), puis surveiller
 pip install -r requirements-monitoring.txt
 python -m velov.replay --url https://192.168.1.2xx --cacert certs/velov.crt --scenario normal
+export MONITOR_DATABASE_URL="postgresql+psycopg://velov_ro:<MONITOR_DB_PASSWORD>@127.0.0.1:5432/velov"   # sur la VM
+python -m velov.monitor --data data/velov_history.csv --out reports/     # code de sortie 1 si alerte
 ```
+
+| Pièce | Fichier |
+|---|---|
+| Proxy TLS, Grafana sous `/grafana/`, Prometheus sous `/prometheus/` (authentifié) | `docker/nginx/velov.conf`, `compose.monitoring.yaml` |
+| Métriques de l'API (seau à 0,2 s pour le SLI, `velov_model_info`) | `src/velov/api/main.py`, `tests/test_metrics.py` |
+| SLI, LatenceHorsSLO, LatenceBurnRate, Erreurs5xx, ApiInjoignable | `docker/prometheus/alerts.yml` |
+| Tableau de bord (débit, 5xx, SLI, modèle servi), provisionné | `docker/grafana/dashboards/velov.json` |
+| Dérive (Evidently) et MAE face à la persistance, globale et par station | `src/velov/monitor.py`, `tests/test_monitor.py` |
+| Conduite à tenir : alertes, dérive, sécurité | `docs/runbook.md` (sections 3, 7, 8, 9) |
+| Lecture des semaines rejouées, seuils | `docs/model_card.md` (section 8) |
+
+### Mesures en local (2026-11-20, VM injoignable)
+Stack complète sur le poste (Windows 11, Docker Desktop, Compose 2.7), certificat pour `127.0.0.1`.
+
+- **Proxy** : 301, 60, 200, 404, 502 pour les cinq appels de S6 · 09 ; ports 8000, 3000, 9090, 5000 et 5432
+  refusés depuis l'adresse réseau du poste, 443 accepté ; Prometheus 401 sans identifiant.
+- **Prometheus** : cible `velov-api` UP ; `promtool check rules` : 7 règles valides ; SLI 0,98 sous charge
+  légère, 0,66 sous Locust à 10 usagers (toute la stack sur un poste) ; API arrêtée : ApiInjoignable `firing`.
+- **Grafana** : tableau dans le dossier Velov, revenu après suppression du volume `grafanadata`.
+- **Semaines rejouées** (même modèle 0.1.0, 3 340 prédictions jugées par semaine) :
+
+| Semaine | Colonnes en dérive (score) | MAE | Persist. | Ratio | Alerte |
+|---|---|---|---|---|---|
+| Normale | temperature (0,39) | 1,309 | 1,821 | 0,72 | non |
+| Froid, −15 °C | temperature (4,46) | 1,419 | 1,821 | 0,78 | non |
+| Déménagement | temperature, bikes_available (0,25), occupancy_rate (0,30), predicted_bikes (0,26) | 1,584 | 1,818 | 0,87 | stations 2, 5, 8, 11, 14, 17, 20 |
+
+Points relevés :
+- Docker Compose 2.7 **ignore `ports: !reset []`** sans erreur (il faut 2.24) : le port 8000 restait ouvert sur
+  toutes les interfaces. `compose.yaml` publie donc l'API sur `127.0.0.1` seulement, quelle que soit la version.
+- La table `predictions` contenait 26 516 lignes aléatoires des tests de charge de S5, sur les mêmes dates
+  que la semaine rejouée : `velov.monitor --depuis <début du rejeu>` les exclut sans les effacer.
 
 ## Structure
 
@@ -156,6 +194,8 @@ src/velov/
   flow.py          flow Prefect : ingestion, dbt, contrat (S3)
   train.py         entraînement, baseline, paquet model.joblib + metadata.json
   export_onnx.py   export ONNX vérifié ligne à ligne, servi avec MODEL_FORMAT=onnx (S5)
+  replay.py        rejeu d'une semaine d'observations contre l'API (S6, fourni)
+  monitor.py       dérive et erreur réelle sur les prédictions journalisées (S6)
   tracking.py      run MLflow, registre, alias (S4)
   promote.py       règle de promotion challenger / champion (S4)
   export.py        version du registre -> models/ avant le build (S4)

@@ -12,3 +12,5 @@ sqlalchemy==2.1.1
 psycopg[binary]==3.3.6
 # Moteur ONNX, servi avec MODEL_FORMAT=onnx après python -m velov.export_onnx (S5).
 onnxruntime==1.32.0
+# Métriques Prometheus exposées sur /metrics (S6).
+prometheus-fastapi-instrumentator==8.1.0

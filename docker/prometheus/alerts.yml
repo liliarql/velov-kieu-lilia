@@ -1,12 +1,37 @@
-# Règles d'alerte de l'API (S6). Vérifier après chaque modification :
+# Règles d'alerte de l'API (S6, EX-20). Vérifier après chaque modification :
 #   docker compose exec prometheus promtool check rules /etc/prometheus/alerts.yml
 #   docker compose restart prometheus
 #
-# Fournie : ApiInjoignable. À écrire au TP6, étape 2 (S6 · 15) :
-#   - la règle d'enregistrement velov:latence_sli:ratio_rate5m (part des /v1/predict sous 200 ms) ;
-#   - LatenceHorsSLO (SLI sous 0,95 pendant 5 min) ;
-#   - Erreurs5xx (plus de 1 % de 5xx sur /v1/predict pendant 5 min).
+# Chaque alerte : un symptôme vu par l'utilisateur, une durée (for), une gravité
+# (page : on réveille l'astreinte ; ticket : on traite en journée) et une ligne du runbook
+# (docs/runbook.md, section 7).
 groups:
+  - name: velov-sli
+    rules:
+      # SLI de latence d'EX-16 : part des POST /v1/predict servis sous 200 ms, sur 5 min glissantes.
+      # Rapport du seau le="0.2" au total : pas d'interpolation, c'est la définition exacte du SLO
+      # (événements bons / événements valides). Le seau existe parce que main.py le déclare.
+      - record: velov:latence_sli:ratio_rate5m
+        expr: |
+          sum(rate(http_request_duration_seconds_bucket{handler="/v1/predict",le="0.2"}[5m]))
+            /
+          sum(rate(http_request_duration_seconds_count{handler="/v1/predict"}[5m]))
+
+      # Même SLI sur 1 h, pour l'alerte de burn rate (deux fenêtres).
+      - record: velov:latence_sli:ratio_rate1h
+        expr: |
+          sum(rate(http_request_duration_seconds_bucket{handler="/v1/predict",le="0.2"}[1h]))
+            /
+          sum(rate(http_request_duration_seconds_count{handler="/v1/predict"}[1h]))
+
+      # Part des réponses 5xx sur les routes de prédiction (unitaire et batch), sur 5 min.
+      # Les 4xx sont des erreurs de l'appelant : suivies dans Grafana, pas alertées.
+      - record: velov:erreurs_5xx:ratio_rate5m
+        expr: |
+          sum(rate(http_requests_total{handler=~"/v1/predict.*",status="5xx"}[5m]) or vector(0))
+            /
+          sum(rate(http_requests_total{handler=~"/v1/predict.*"}[5m]))
+
   - name: velov-api
     rules:
       - alert: ApiInjoignable
@@ -15,3 +40,38 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "Prometheus ne joint plus l'API depuis 1 min"
+          runbook: "docs/runbook.md, section 7 : ApiInjoignable"
+
+      # SLO menacé : moins de 95 % des prédictions sous 200 ms, pendant 5 min.
+      # Le for de 5 min laisse passer un pic qui se résorbe seul (S6 · 16) ; une surcharge
+      # qui dure, elle, réveille l'astreinte.
+      - alert: LatenceHorsSLO
+        expr: velov:latence_sli:ratio_rate5m < 0.95
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "SLI de latence à {{ $value | humanizePercentage }} (SLO : 95 % sous 200 ms)"
+          runbook: "docs/runbook.md, section 7 : LatenceHorsSLO"
+
+      # Burn rate (polycopié S5, 13.2) : SLO 95 % sur 30 jours, budget d'erreur 5 %. Un facteur 14,4
+      # consomme 2 % du budget mensuel en 1 h (14,4 × 1 h / 720 h). Il faut les deux fenêtres :
+      # 1 h prouve que ça dure, 5 min que ça dure encore (l'alerte s'éteint vite après le retour).
+      - alert: LatenceBurnRate
+        expr: |
+          (1 - velov:latence_sli:ratio_rate1h) / 0.05 > 14.4
+            and
+          (1 - velov:latence_sli:ratio_rate5m) / 0.05 > 14.4
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "Budget d'erreur de latence consommé 14,4 fois trop vite (1 h et 5 min)"
+          runbook: "docs/runbook.md, section 7 : LatenceBurnRate"
+
+      # Plus de 1 % de 5xx sur les prédictions pendant 5 min (EX-16 : moins de 1 % d'erreurs).
+      - alert: Erreurs5xx
+        expr: velov:erreurs_5xx:ratio_rate5m > 0.01
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $value | humanizePercentage }} de réponses 5xx sur /v1/predict*"
+          runbook: "docs/runbook.md, section 7 : Erreurs5xx"

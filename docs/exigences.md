@@ -26,6 +26,9 @@ qui dit oui ou non.
 | EX-16 | L'API a un SLO de latence écrit, vérifié par un test de charge | SLO et capacité mesurée dans le runbook ; tableau des paliers Locust et courbe de saturation dans le README, avec machine et protocole | S5 |
 | EX-17 | Une optimisation du modèle n'est servie qu'avec son triplet mesuré | Écart de prédiction ou précision, taille et latence avant et après, dans un ADR | S5 |
 | EX-18 | Le remplacement du modèle suit une stratégie et des critères de retour arrière écrits d'avance | Section du runbook : stratégie, signaux, seuils, commande de retour arrière | S5 |
+| EX-19 | Le service n'est joignable qu'en HTTPS, par le proxy | Port 8000 fermé vu du poste ; /ready en 200 avec --cacert ; /metrics en 404 ; clé privée hors de git | S6 |
+| EX-20 | Le SLO d'EX-16 est suivi en continu et une alerte prévient quand il est menacé | Règle d'enregistrement du SLI, alertes vérifiées par promtool, tableau de bord versionné dans le dépôt | S6 |
+| EX-21 | La dérive et l'erreur réelle sont mesurées sur les prédictions journalisées | Rapport velov.monitor commenté ; MAE face à la persistance ; conduite à tenir dans le runbook | S6 |
 
 ## Conventions associées
 

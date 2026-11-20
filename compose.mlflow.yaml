@@ -4,7 +4,8 @@
 # Ce fichier complète compose.yaml : on lance toujours les deux ensemble.
 #
 #   docker compose -f compose.yaml -f compose.mlflow.yaml up -d --build
-#   Interface : http://<ip-de-la-vm>:5000
+#   Interface : http://127.0.0.1:5000 sur la VM ; depuis le poste, tunnel SSH :
+#               ssh -L 5000:127.0.0.1:5000 <user>@<ip-de-la-vm>  puis http://localhost:5000
 #
 # Prérequis : POSTGRES_PASSWORD dans .env (le même qu'en S2, rien de nouveau).
 # Attention : docker compose down -v supprime désormais aussi le registre MLflow.
@@ -48,7 +49,9 @@ services:
       --artifacts-destination /mlartifacts
       --allowed-hosts mlflow:5000,localhost:5000,127.0.0.1:5000,192.168.1.*
     ports:
-      - "5000:5000"
+      # 127.0.0.1 seulement (S6) : MLflow n'a aucune authentification, et son registre décide du
+      # modèle servi (alias champion). Depuis le poste : ssh -L 5000:127.0.0.1:5000 <user>@<ip-vm>
+      - "127.0.0.1:5000:5000"
     volumes:
       - mlartifacts:/mlartifacts
     depends_on:

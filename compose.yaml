@@ -11,7 +11,10 @@ services:
         PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
     image: velov-api:${TAG:-dev}
     ports:
-      - "8000:8000"
+      # 127.0.0.1 seulement (S6, EX-19) : depuis le réseau, on passe par le proxy en HTTPS.
+      # compose.monitoring.yaml retire aussi ce port (!reset), mais Docker Compose avant 2.24
+      # ignore !reset sans erreur (constaté avec Compose 2.7) : cette ligne protège dans tous les cas.
+      - "127.0.0.1:8000:8000"
     environment:
       MODEL_DIR: /app/models
       LOG_LEVEL: INFO

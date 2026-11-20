@@ -1,0 +1,118 @@
+{
+  "uid": "velov-api",
+  "title": "Vélo'v · API de prédiction",
+  "description": "Golden signals de l'API et SLI de latence (S6, EX-20). Provisionné depuis docker/grafana/dashboards/velov.json : modifier ce fichier, pas l'interface.",
+  "tags": ["velov", "s6"],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "schemaVersion": 41,
+  "version": 1,
+  "time": {"from": "now-1h", "to": "now"},
+  "templating": {"list": []},
+  "annotations": {"list": []},
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Débit par route (req/s)",
+      "description": "Une chute brutale est souvent le premier signe d'une panne en amont.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "sum by (handler) (rate(http_requests_total{handler=~\"/v1/.*\"}[1m]))",
+          "legendFormat": "{{handler}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "reqps", "min": 0, "custom": {"fillOpacity": 10}},
+        "overrides": []
+      },
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Part des réponses 5xx",
+      "description": "Seuil d'alerte Erreurs5xx : 1 % pendant 5 min. Les 4xx (erreurs de l'appelant) ne comptent pas.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "(sum(rate(http_requests_total{status=\"5xx\"}[5m])) or vector(0)) / sum(rate(http_requests_total[5m]))",
+          "legendFormat": "part des 5xx"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {"thresholdsStyle": {"mode": "line"}},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.01}]}
+        },
+        "overrides": []
+      },
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "SLI de latence : part des /v1/predict sous 200 ms (5 min)",
+      "description": "Règle d'enregistrement velov:latence_sli:ratio_rate5m. SLO (EX-16) : 0,95. Sous la ligne pendant 5 min : alerte LatenceHorsSLO.",
+      "gridPos": {"h": 8, "w": 18, "x": 0, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "velov:latence_sli:ratio_rate5m",
+          "legendFormat": "SLI"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0.8,
+          "max": 1,
+          "decimals": 2,
+          "custom": {"thresholdsStyle": {"mode": "line"}, "fillOpacity": 10},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 0.95}]}
+        },
+        "overrides": []
+      },
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Modèle servi",
+      "description": "velov_model_info : la version est dans le label. Deux versions à la fois : un canary est en cours.",
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "velov_model_info",
+          "legendFormat": "{{model_version}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "none", "color": {"mode": "fixed", "fixedColor": "blue"}}, "overrides": []},
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      }
+    }
+  ]
+}

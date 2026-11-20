@@ -6,6 +6,7 @@ Endpoints :
     GET  /v1/model          métadonnées du modèle servi
     POST /v1/predict        une prédiction
     POST /v1/predict/batch  jusqu'à 1000 prédictions
+    GET  /metrics           métriques Prometheus (S6) ; 404 vu de l'extérieur, filtré par le proxy
 
 Horodatage : les timestamps entrants doivent porter un fuseau ; ils sont normalisés en UTC
 (voir schemas.py) et les réponses sont en UTC.
@@ -33,6 +34,8 @@ import joblib
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
+from prometheus_client import Gauge
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from velov.api import storage
 from velov.api.schemas import (
@@ -49,6 +52,15 @@ logger = logging.getLogger("velov.api")
 
 # État du service, rempli au démarrage.
 STATE: dict = {"model": None, "metadata": None, "engine": None}
+
+# Seaux de latence de http_request_duration_seconds (S6 · 14) : une borne exactement au seuil du
+# SLO (0.2 s, EX-16) pour calculer le SLI sans interpolation, et des bornes jusqu'à 5 s parce
+# qu'en S5 le p95 montait à 4 s sous surcharge. Les seaux par défaut (0.1, 0.5, 1) n'ont pas de
+# borne à 0.2 : « 95 % sous 200 ms » ne se calculerait pas.
+LATENCY_BUCKETS = (0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1, 2.5, 5)
+
+# Vaut toujours 1 : c'est le label qui porte l'information (quelle version tourne, utile en canary).
+MODEL_INFO = Gauge("velov_model_info", "Modèle servi", ["model_version"])
 
 
 def load_model(model_dir: Path) -> tuple[object, dict]:
@@ -95,8 +107,10 @@ def load_engine(model_dir: Path) -> tuple[object, dict]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     model_dir = Path(os.getenv("MODEL_DIR", "models"))
+    MODEL_INFO.clear()  # sans modèle chargé, aucune version n'est annoncée
     try:
         STATE["model"], STATE["metadata"] = load_engine(model_dir)
+        MODEL_INFO.labels(model_version=STATE["metadata"]["model_version"]).set(1)
         logger.info(
             "Modèle %s chargé depuis %s (%s)",
             STATE["metadata"]["model_version"],
@@ -116,6 +130,7 @@ async def lifespan(app: FastAPI):
             logger.exception("Base de données indisponible : journalisation désactivée")
     yield
     STATE.update(model=None, metadata=None, engine=None)
+    MODEL_INFO.clear()
 
 
 app = FastAPI(
@@ -124,6 +139,15 @@ app = FastAPI(
     description="Prédit le nombre de vélos disponibles dans 1 h, par station.",
     lifespan=lifespan,
 )
+
+# Débit, erreurs et latence par route (golden signals, S6 · 12). handler est le gabarit de la route,
+# jamais une donnée de la requête : peu de valeurs, donc peu de séries (cardinalité).
+# http_requests_inprogress donne la saturation : le worker unique de S5 qui se remplit.
+Instrumentator(
+    excluded_handlers=["/metrics"],
+    should_instrument_requests_inprogress=True,
+    inprogress_labels=True,
+).instrument(app, latency_lowr_buckets=LATENCY_BUCKETS).expose(app, include_in_schema=False)
 
 
 @app.middleware("http")
